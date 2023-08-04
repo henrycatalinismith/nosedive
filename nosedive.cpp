@@ -8,9 +8,6 @@ SDL_Surface *spritesheet;
 
 std::size_t target_frame_duration = 16;
 Uint32 title_timestamp;
-Uint32 frame_start;
-Uint32 frame_end;
-Uint32 frame_duration;
 int frame_count = 0;
 bool running = true;
 
@@ -45,7 +42,7 @@ void loop() {
 }
 
 void tick() {
- frame_start = SDL_GetTicks();
+ Uint32 frame_start = SDL_GetTicks();
  SDL_Event e;
 
  while (SDL_PollEvent(&e)) {
@@ -60,9 +57,9 @@ void tick() {
   }
  }
 
- frame_end = SDL_GetTicks();
+ Uint32 frame_end = SDL_GetTicks();
  frame_count++;
- frame_duration = frame_end - frame_start;
+ Uint32 frame_duration = frame_end - frame_start;
 
  if (frame_end - title_timestamp >= 1000) {
   SDL_SetWindowTitle(window, std::to_string(frame_count).c_str());
@@ -76,4 +73,22 @@ void tick() {
 }
 
 void draw() {
+ // SDL_Surface *s = IMG_Load("nosedive.png");
+ SDL_Texture *t = IMG_LoadTexture(renderer, "nosedive.png");
+
+ SDL_Rect src;
+ src.x = 0;
+ src.y = 0;
+ src.w = 128;
+ src.h = 128;
+
+ SDL_Rect dst;
+ dst.x = 0;
+ dst.y = 0;
+ dst.w = 128;
+ dst.h = 128;
+
+ SDL_RenderCopy(renderer, t, &src, &dst);
+ SDL_RenderPresent(renderer);
+ // SDL_DestroyTexture(t);
 }
