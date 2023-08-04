@@ -1,0 +1,6 @@
+.vscode
+nosedive
+nosedive.p8
+CMakefiles
+CMakeCache.txt
+cmake_install.cmake

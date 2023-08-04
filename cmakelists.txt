@@ -1,0 +1,9 @@
+cmake_minimum_required(VERSION 3.24)
+project(nosedive)
+
+find_package(SDL2 REQUIRED)
+find_package(SDL2_image REQUIRED)
+
+add_executable(nosedive nosedive.cpp)
+target_link_libraries(nosedive ${SDL2_LIBRARIES})
+target_link_libraries(nosedive SDL2_image::SDL2_image)
