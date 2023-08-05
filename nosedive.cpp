@@ -6,6 +6,25 @@
 SDL_Window *window;
 SDL_Renderer *renderer;
 SDL_Texture *spritesheet;
+int palette[16][3] = {
+  {0, 0, 0},
+  {29, 43, 83},
+  {126, 37, 83},
+  {0, 135, 81},
+  {171, 82, 54},
+  {95, 87, 79},
+  {194, 195, 199},
+  {255, 241, 232},
+  {255, 0, 77},
+  {255, 163, 0},
+  {255, 236, 39},
+  {0, 228, 54},
+  {41, 173, 255},
+  {131, 118, 156},
+  {255, 119, 168},
+  {255, 204, 170},
+};
+uint8_t memory[0x8000];
 
 int window_width;
 int window_height;
@@ -63,6 +82,10 @@ void init()
  camera_y0 = 0;
  camera_y1 = 0;
  camera_y2 = 127;
+
+ for (int addr = 0x6000; addr <= 0x7FFF; addr++) {
+  memory[addr] = 0;
+ }
 }
 
 void loop()
@@ -206,7 +229,7 @@ void pset(int x, int y, int c)
  rect.w = 1 * window_scale;
  rect.h = 1 * window_scale;
 
- SDL_SetRenderDrawColor(renderer, 0, 255, 255, 0);
+ SDL_SetRenderDrawColor(renderer, 0, palette[c][0], palette[c][1], palette[c][2]);
  SDL_RenderFillRect(renderer, &rect);
 }
 
