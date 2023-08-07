@@ -1,6 +1,9 @@
 #include <iostream>
 #include <algorithm>
+#include <array>
 #include <math.h>
+#include <numeric>
+#include <vector>
 #include "SDL.h"
 #include "SDL_image.h"
 
@@ -808,13 +811,6 @@ int window_width;
 int window_height;
 int window_scale;
 
-int camera_x0;
-int camera_x1;
-int camera_x2;
-int camera_y0;
-int camera_y1;
-int camera_y2;
-
 bool upagain = false;
 std::size_t target_frame_duration = 16;
 Uint32 title_timestamp;
@@ -832,6 +828,7 @@ void circ (int x, int y, int r, int col);
 void circfill(int x, int y, int r, int col);
 void cls(int col);
 void line(int x0, int y0, int x1, int y1, int col);
+double mid(double a, double b, double c);
 int nibble(int addr, bool high);
 void nobble(int addr, bool high, int val);
 int peek(int addr);
@@ -878,9 +875,51 @@ void _draw();
 
 #define MODE_MENU 0
 #define MODE_PLAY 1
+#define MODE_DEAD 2
 
 int loop(int n, int m, int o);
 void mode(int mode);
+
+std::array<int,128> cave_floor;
+std::array<int,128> cave_roof;
+
+double camera_x1;
+double camera_y1;
+double camera_x2;
+double camera_y2;
+double camera_vx;
+double camera_vy;
+double camera_ideal_y1;
+double camera_error_y1;
+double camera_offset_y1;
+double camera_error_count;
+
+#define HELICOPTER_HOVERING 1
+#define HELICOPTER_DROPPING 2
+#define HELICOPTER_CLIMBING 3
+
+double helicopter_x;
+double helicopter_y;
+double helicopter_gravity = 0.1;
+double helicopter_min_vy = -1.5;
+double helicopter_max_vy = 2;
+double helicopter_vx;
+double helicopter_vy;
+int helicopter_inclination;
+int helicopter_collision_frame;
+
+bool rotor_engaged;
+double rotor_vy = 0;
+double rotor_power = -0.3;
+int rotor_collision_frame;
+
+double hitbox_x1;
+double hitbox_y1;
+double hitbox_x2;
+double hitbox_y2;
+
+void rotor_collision();
+void helicopter_collision();
 
 int main()
 {
@@ -907,12 +946,12 @@ void init()
  renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
  // spritesheet = IMG_LoadTexture(renderer, "nosedive.png");
  spritesheet = IMG_Load("nosedive.png");
- camera_x0 = 0;
- camera_x1 = 0;
- camera_x2 = 127;
- camera_y0 = 0;
- camera_y1 = 0;
- camera_y2 = 127;
+ // camera_x0 = 0;
+ // camera_x1 = 0;
+ // camera_x2 = 127;
+ // camera_y0 = 0;
+ // camera_y1 = 0;
+ // camera_y2 = 127;
 
  for (int addr = 0x6000; addr <= 0x7FFF; addr++) {
   memory[addr] = 0;
@@ -1012,17 +1051,17 @@ void tick()
      int bar_width;
      int bar_height;
      if (window_height > window_width) {
-      bar_height = (window_height - window_width) / 2;
-      camera_y0 = camera_y1 - (bar_height / window_scale);
-      camera_x0 = camera_x1;
+      // bar_height = (window_height - window_width) / 2;
+      // camera_y0 = camera_y1 - (bar_height / window_scale);
+      // camera_x0 = camera_x1;
      }
      if (window_width > window_height) {
-      bar_width = (window_width - window_height) / 2;
-      camera_x0 = camera_x1 - (bar_width / window_scale);
-      camera_y0 = camera_y1;
+      // bar_width = (window_width - window_height) / 2;
+      // camera_x0 = camera_x1 - (bar_width / window_scale);
+      // camera_y0 = camera_y1;
      }
-     printf("bar height: %d\n", bar_height);
-     printf("bar width: %d\n", bar_width);
+     // printf("bar height: %d\n", bar_height);
+     // printf("bar width: %d\n", bar_width);
     }
     break;
 
@@ -1057,7 +1096,7 @@ void draw()
 
  SDL_Rect dst;
  dst.x = 0;
- dst.y = 0 - camera_y0 * window_scale;
+ dst.y = 0;
  dst.w = window_width;
  dst.h = window_height;
 
@@ -1086,11 +1125,10 @@ int pow2(int n)
 
 void camera(int x, int y)
 {
- camera_x1 = x;
- camera_x2 = x + 128;
- camera_y0 = y;
- camera_y1 = y;
- camera_y2 = y + 128;
+ poke(DRAW_CAMERA_X_LO, x % 256);
+ poke(DRAW_CAMERA_X_HI, (x >> 8) & 0xff);
+ poke(DRAW_CAMERA_Y_LO, y % 256);
+ poke(DRAW_CAMERA_Y_HI, (y >> 8) & 0xff);
 }
 
 void circ(int x, int y, int r, int col)
@@ -1185,6 +1223,18 @@ void line(int x0, int y0, int x1, int y1, int col)
    y0 += sy;
   }
  }
+}
+
+double mid(double a, double b, double c)
+{
+ double data[3] = { a, b, c };
+ if (data[0] > data[1]) {
+  std::swap(data[1], data[0]);
+ }
+ for (int j = 2; j > 0 && data[j - 1] > data[j]; --j) {
+  std::swap(data[j], data[j - 1]);
+ }
+ return data[1];
 }
 
 int nibble(int addr, bool high)
@@ -1348,7 +1398,8 @@ void getpixel(SDL_Surface *surface, int x, int y, Uint8 *r, Uint8 *g, Uint8 *b)
 
 void _init()
 {
- mode(MODE_MENU);
+ // mode(MODE_MENU);
+ mode(MODE_PLAY);
 }
 
 void _tick()
@@ -1356,6 +1407,102 @@ void _tick()
  if (update_mode & UPDATE_MENU) {
   if (touch()) {
    mode(MODE_PLAY);
+  }
+ }
+
+ if (update_mode & UPDATE_CAMERA) {
+
+  if (rotor_collision_frame != NULL &&  helicopter_y-64>camera_y1) {
+   camera_ideal_y1 = helicopter_y-64;
+  } else {
+   int src[] = {
+    cave_roof[32] + 1,
+    cave_floor[32],
+    cave_roof[96] + 1,
+    cave_floor[96],
+   };
+   int n = sizeof(src) / sizeof(src[0]);
+   std::vector<int> vec(src, src + n);
+   camera_ideal_y1 = std::accumulate(vec.begin(), vec.end(), 0.0) / vec.size();
+  }
+
+  camera_offset_y1 = camera_y1 - camera_ideal_y1;
+  camera_error_y1 = abs(camera_offset_y1);
+
+  if (camera_error_y1 < 1) {
+   camera_error_count = 0;
+  } else {
+   camera_error_count += 1;
+  }
+
+  camera_vy = floor(
+   camera_offset_y1
+   * (camera_error_count / 256)
+   * -1
+  );
+
+  camera_x1 += camera_vx;
+  camera_y1 += camera_vy;
+  camera_x2 = camera_x1 + 128;
+  camera_y2 = camera_y1 + 128;
+ }
+
+ if (update_mode & UPDATE_CAVE) {
+ }
+
+ if (update_mode & UPDATE_HELICOPTER) {
+  helicopter_vy += helicopter_gravity;
+  helicopter_vy += rotor_vy;
+  helicopter_vy = mid(
+   helicopter_min_vy,
+   helicopter_vy,
+   helicopter_max_vy
+  );
+  helicopter_x += helicopter_vx;
+  helicopter_y += helicopter_vy;
+
+  if (helicopter_vy > 0 && !rotor_engaged) {
+   helicopter_inclination = HELICOPTER_DROPPING;
+  } else if (helicopter_vy < 0 && rotor_engaged) {
+   helicopter_inclination = HELICOPTER_CLIMBING;
+  } else {
+   helicopter_inclination = HELICOPTER_HOVERING;
+  }
+ }
+
+ if (update_mode & UPDATE_ROTOR) {
+  rotor_engaged = touch();
+  if (rotor_engaged) {
+   rotor_vy = rotor_power;
+  } else {
+   rotor_vy = 0;
+  }
+ }
+
+ if (update_mode & UPDATE_HITBOX) {
+  hitbox_x1 = helicopter_x - 4;
+  hitbox_y1 = helicopter_y - 4;
+  hitbox_x2 = hitbox_x1 + 8;
+  hitbox_y2 = hitbox_y1 + 6;
+
+  for (int x = hitbox_x1; x < hitbox_x2; x++) {
+   int i = x - camera_x1;
+   int roof = cave_roof[i];
+   int floor = cave_floor[i];
+   for (int y = hitbox_y1; y < hitbox_y2; y++) {
+    int j = x - camera_x1;
+    if (y < cave_roof[i]) {
+     rotor_collision();
+    } else if (y > cave_floor[i]) {
+     helicopter_collision();
+    }
+   }
+  }
+ }
+
+ if (update_mode & UPDATE_DEAD) {
+  if (touch()) {
+   mode(MODE_MENU);
   }
  }
 
@@ -1382,14 +1529,44 @@ void _draw()
   return;
  }
 
- pset(0, 0, 8);
- pset(127, 127, 8);
- line(32, 32, 64, 64, 9);
- rectfill(100, 8, 108, 16, 10);
- rect(0, 0, 127, 127, 11);
- sspr(0, 0, 128, 128, 0, 0);
- 
- // camera(camera_x1 + 1, 0);
+ if (draw_mode & DRAW_CAMERA) {
+  camera(camera_x1, camera_y1);
+ }
+
+ if (draw_mode & DRAW_CAVE) {
+  for (int i = 0; i < 128; i++) {
+   pset(i, cave_floor[i], 7);
+   pset(i, cave_roof[i], 7);
+  }
+ }
+
+ if (draw_mode & DRAW_HELICOPTER) {
+  int helicopter_sprite_column = helicopter_inclination;
+  int helicopter_sprite_x = (helicopter_sprite_column - 1) * 16;
+  sspr(
+   0,
+   0,
+   16,
+   8,
+   helicopter_x - 8,
+   helicopter_y - 4
+  );
+ }
+
+ if (draw_mode & DRAW_HITBOX) {
+  rect(
+   hitbox_x1,
+   hitbox_y1,
+   hitbox_x2,
+   hitbox_y2,
+   11
+  );
+  for (int x = hitbox_x1; x < hitbox_x2; x++) {
+   int i = x - camera_x1;
+   pset(x, cave_floor[i], 11);
+   pset(x, cave_roof[i], 11);
+  }
+ }
 }
 
 int loop(int n, int m, int o)
@@ -1406,11 +1583,76 @@ void mode(int mode)
  }
 
  if (mode == MODE_PLAY) {
+  cave_floor.fill(118);
+  cave_roof.fill(7);
+
+  camera_x1 = 0;
+  camera_y1 = 0;
+  camera_x2 = 128;
+  camera_y2 = 128;
+  camera_vx = 2;
+  camera_vy = 0;
+
+  helicopter_x = 48;
+  helicopter_y = 80;
+  helicopter_vx = 2;
+  helicopter_vy = 0;
+  helicopter_inclination = HELICOPTER_DROPPING;
+  helicopter_collision_frame = NULL;
+
+  rotor_collision_frame = NULL;
+
   update_mode = (
-   UPDATE_CAVE
+   UPDATE_CAMERA
+   | UPDATE_CAVE
+   | UPDATE_HELICOPTER
+   | UPDATE_ROTOR
+   | UPDATE_HITBOX
+  );
+
+  draw_mode = (
+   DRAW_CAMERA
+   | DRAW_CAVE
+   | DRAW_HELICOPTER
+   | DRAW_ROTOR
+   | DRAW_HITBOX
+  );
+ }
+
+ if (mode == MODE_DEAD) {
+  update_mode = (
+   UPDATE_DEAD
   );
   draw_mode = (
    DRAW_CAVE
   );
  }
+}
+
+void rotor_collision()
+{
+ if (rotor_collision_frame != NULL) {
+  return;
+ }
+ rotor_collision_frame = frame_count;
+ rotor_engaged = false;
+ rotor_vy = 0;
+ helicopter_vy = 2;
+ helicopter_max_vy = 4;
+ update_mode &= ~UPDATE_ROTOR;
+ draw_mode &= ~DRAW_ROTOR;
+}
+
+void helicopter_collision()
+{
+ if (helicopter_collision_frame != NULL) {
+  return;
+ }
+ helicopter_collision_frame = frame_count;
+ rotor_engaged = false;
+ rotor_vy = 0;
+ helicopter_vy = 0;
+ helicopter_vx = 0;
+ // camera_vx = 0;
+ mode(MODE_DEAD);
 }
