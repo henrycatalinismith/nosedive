@@ -4,6 +4,7 @@
 #include "SDL.h"
 #include "SDL_image.h"
 
+#define TOUCH_0_B 0x4300
 #define DRAW_CAMERA_X_LO 0x5f28
 #define DRAW_CAMERA_X_HI 0x5f29
 #define DRAW_CAMERA_Y_LO 0x5f2a
@@ -814,6 +815,7 @@ int camera_y0;
 int camera_y1;
 int camera_y2;
 
+bool upagain = false;
 std::size_t target_frame_duration = 16;
 Uint32 title_timestamp;
 int frame_count = 0;
@@ -842,6 +844,7 @@ void rectfill(int x0, int y0, int x1, int y1, int col);
 int sget(int x, int y);
 void sset(int x, int y, int c);
 void sspr(int sx, int sy, int sw, int sh, int dx, int dy);
+bool touch();
 
 void getpixel(SDL_Surface *surface, int x, int y, Uint8 *r, Uint8 *g, Uint8 *b);
 
@@ -873,7 +876,11 @@ void _init();
 void _tick();
 void _draw();
 
+#define MODE_MENU 0
+#define MODE_PLAY 1
+
 int loop(int n, int m, int o);
+void mode(int mode);
 
 int main()
 {
@@ -953,15 +960,43 @@ void tick()
 {
  Uint32 frame_start = SDL_GetTicks();
  SDL_Event e;
+ bool down = false;
+
+ if (upagain) {
+  poke(TOUCH_0_B, false);
+  // poke(TOUCH_0_X, 0);
+  // poke(TOUCH_0_Y, 0);
+  upagain = false;
+ }
 
  while (SDL_PollEvent(&e)) {
   switch (e.type) {
+   case SDL_FINGERDOWN:
+    poke(TOUCH_0_B, true);
+    break;
+
+   case SDL_FINGERUP:
+    poke(TOUCH_0_B, false);
+    break;
 
    case SDL_KEYDOWN:
     switch (e.key.keysym.sym) {
      case SDLK_UP:
       running = false;
       break;
+    }
+    break;
+
+   case SDL_MOUSEBUTTONDOWN:
+    poke(TOUCH_0_B, true);
+    down = true;
+    break;
+
+   case SDL_MOUSEBUTTONUP:
+    if (down) {
+     upagain = true;
+    } else {
+     poke(TOUCH_0_B, false);
     }
     break;
 
@@ -1278,6 +1313,11 @@ void sspr(int sx, int sy, int sw, int sh, int dx, int dy)
  }
 }
 
+bool touch()
+{
+ return peek(TOUCH_0_B);
+}
+
 void getpixel(SDL_Surface *surface, int x, int y, Uint8 *r, Uint8 *g, Uint8 *b)
 {
  int bpp = surface->format->BytesPerPixel;
@@ -1308,12 +1348,17 @@ void getpixel(SDL_Surface *surface, int x, int y, Uint8 *r, Uint8 *g, Uint8 *b)
 
 void _init()
 {
+ mode(MODE_MENU);
 }
 
 void _tick()
 {
- update_mode = UPDATE_MENU;
- draw_mode = DRAW_MENU;
+ if (update_mode & UPDATE_MENU) {
+  if (touch()) {
+   mode(MODE_PLAY);
+  }
+ }
+
  // update_mode |= UPDATE_CAMERA;
  // update_mode |= UPDATE_CAVE;
  // update_mode |= UPDATE_HELICOPTER;
@@ -1350,4 +1395,22 @@ void _draw()
 int loop(int n, int m, int o)
 {
  return floor(n % m / floor(m / o));
+}
+
+void mode(int mode)
+{
+ if (mode == MODE_MENU) {
+  update_mode = UPDATE_MENU;
+  draw_mode = DRAW_MENU;
+  return;
+ }
+
+ if (mode == MODE_PLAY) {
+  update_mode = (
+   UPDATE_CAVE
+  );
+  draw_mode = (
+   DRAW_CAVE
+  );
+ }
 }
