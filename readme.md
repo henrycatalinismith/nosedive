@@ -4,4 +4,4 @@ Helicopter game (unfinished)
 
 ## License
 
-[MIT](https://codeberg.org/henrycatalinismith/nosedive/src/branch/main/license)
+[MIT](https://github.com/henrycatalinismith/nosedive/blob/main/license)
