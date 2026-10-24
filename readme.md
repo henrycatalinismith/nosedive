@@ -4,4 +4,4 @@ Helicopter game (unfinished)
 
 ## License
 
-[MIT](https://github.com/henrycatalinismith/nosedive/blob/main/license)
+[FCL](https://github.com/henrycatalinismith/nosedive/blob/main/license)
