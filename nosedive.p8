@@ -216,6 +216,8 @@ function _update60()
       and (coin.x1 < x and coin.x2 > x)
       and not (coin.y2 < hitbox_y1 or coin.y1 > hitbox_y2)
       then
+      -- cave_vx += 1
+      coin_combo_length += 1
       coin.hit = clock_frame
       coins_count += 1
       camera_shake_intensity = 5
@@ -233,6 +235,7 @@ function _update60()
      end
 
     elseif coin.hit == nil and coin.miss == nil then
+     coin_combo_length = 0
      coin.miss = clock_frame
     end
 
@@ -291,15 +294,34 @@ function _update60()
    end
   end
 
-  if #coins == 0 or coins[#coins].x2 < 120 then
+  if (#coins == 0 or coins[#coins].x2 < 120) and biome_id != "start" then
    if coin_cooldown_frame <= coin_cooldown_limit then
     coin_cooldown_frame += 1
    else
     coin_cooldown_frame = 0
-    local x1 = 130
+    local x1 = 120
+    local cx1 = x1
 
-    local y1 = cave_get(cave_roof, 136) + ((
-     cave_get(cave_floor, 136) - cave_get(cave_roof, 136)
+    local top = cave_roof
+    local btm = cave_floor
+
+    local crt0 = cave_get(cave_rock_top, x1)
+    local crt00 = cave_get(cave_rock_top, x1+10)
+    if crt0 or crt00 then
+     if crt00 then
+      cx1 += 10
+     end
+     top_gap = abs(cave_get(cave_roof, cx1) - cave_get(cave_rock_top, cx1))
+     btm_gap = abs(cave_get(cave_floor, cx1) - cave_get(cave_rock_bottom, cx1))
+     if top_gap > btm_gap then
+      btm = cave_rock_top
+     else
+      top = cave_rock_bottom
+     end
+    end
+
+    local y1 = cave_get(top, cx1) + ((
+     cave_get(btm, cx1) - cave_get(top, cx1)
     ) / 2) - 4
 
     local x2 = x1+9
@@ -549,6 +571,7 @@ end
   draw_bar("cpu", stat(1), 1, 123)
   -- print(cave_y1, 32, 1, 7)
   print(biome_id, 1, 1, 7)
+  print(coin_combo_length, 120, 2)
  end
 
  if draw(draw_dead) then
@@ -720,7 +743,7 @@ function mode(m)
 
   coin_height = 64
   coin_cooldown_frame = clock_frame
-  coin_cooldown_limit = 32
+  coin_cooldown_limit = 48
 
   for x = 1,chunk_length do
    local slice = chunk_fn(x/chunk_length)
@@ -733,13 +756,14 @@ function mode(m)
 
   coins = {}
   coins_count = 0
+  coin_combo_length = 0
 
   debug_messages = {}
   debug_color = 8
 
   helicopter_x = 48
-  helicopter_y = 80
-  helicopter_vy = 0.5
+  helicopter_y = 120
+  helicopter_vy = 2
   helicopter_inclination = "dropping"
   helicopter_gravity = 0.1
   helicopter_min_vy = -1.5
@@ -1348,8 +1372,12 @@ end
 function biome_start()
  biome_id = "start"
  biome_next_chunk = function()
-  if biome_chunk_count < 1 then
-   return tunnel(0, 110)
+  if biome_chunk_count == 0 then
+   -- return tunnel(0, 110)
+   return chunk(
+    static(0) + noise(1) + linear(200),
+    static(0 + 160) + noise(1) + linear(250)
+   )
   end
  end
 end
@@ -1400,15 +1428,22 @@ end
 
 function next_biome()
  biome_chunk_count = 0
- if biome_id == "start" then
+ if coin_combo_length == 1 then
   biome_zigzag()
- elseif biome_id == "zigzag" then
-  biome_rooms()
- elseif biome_id == "rooms" then
-  biome_normal()
  else
-  biome_rooms()
+  biome_normal()
  end
+ -- if biome_id == "start" then
+  -- biome_zigzag()
+ -- else
+ -- end
+ -- elseif biome_id == "zigzag" then
+  -- biome_rooms()
+ -- elseif biome_id == "rooms" then
+  -- biome_normal()
+ -- else
+  -- biome_rooms()
+ -- end
 end
 
 function sinewave(magnitude, frequency)
@@ -1573,4 +1608,3 @@ __music__
 00 03424344
 03 04054344
 03 08424344
-
