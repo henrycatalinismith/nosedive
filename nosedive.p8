@@ -52,6 +52,10 @@ function _init()
  camera_x1 = 0
  camera_y1 = 0
  boost_engaged_frame = nil
+ boost_duration = 128
+ boost_blast_radius = 10
+ boost_debris_per_frame = 3
+ boost_tunnel_always_on = false
  fuel = 64
  fuel_max = 64
  fuel_gained_frame = nil
@@ -84,10 +88,10 @@ function _update60()
    camera_ideal_y1 = helicopter_y-64
   else
    camera_ideal_y1 = avg({
-    cave_get(cave_roof, 32) + 1,
-    cave_get(cave_floor, 32),
-    cave_get(cave_roof, 96) + 1,
-    cave_get(cave_floor, 96),
+    cave_roof_y(32) + 1,
+    cave_floor_y(32),
+    cave_roof_y(96) + 1,
+    cave_floor_y(96),
    }) - 64
   end
 
@@ -115,36 +119,28 @@ function _update60()
   cave_vx = 2
   add(booms, {
    age = 0,
-   life = 24,
+   life = boost_duration,
+   radius = boost_blast_radius,
   })
  end
 
  if boost_engaged_frame then
-  if (clock_frame - boost_engaged_frame) >= 128 then
+  if (clock_frame - boost_engaged_frame) >= boost_duration then
    boost_engaged_frame = nil
    cave_vx = 1
-  else
-   for x = helicopter_x - 4, helicopter_x + 12 do
-    local i = flr(x)
-    if i >= 1 and i <= 128 then
-     local rt = cave_get(cave_rock_top, i)
-     local rb = cave_get(cave_rock_bottom, i)
-     if rt and rb then
-      cave_set(cave_rock_top, i, nil)
-      cave_set(cave_rock_bottom, i, nil)
-      for d = 1, 8 do
-       add(debris, {
-        color = choose({0,0,0,0,0,0,0,0,0,5,6,6,7,11}),
-        x = i,
-        y = rt + rnd(rb - rt),
-        vx = -2 + rnd(4),
-        vy = 0 - rnd(2),
-       })
-      end
-     end
-    end
-   end
   end
+ end
+
+ if helicopter_x ~= nil and cave_spans_arr ~= nil
+   and (boost_tunnel_always_on or boost_engaged_frame) then
+  -- Temporary test mode: keep the carving field around the helicopter
+  -- continuously, even when boost itself is not active.
+  carve_terrain(
+   helicopter_x + 4,
+   helicopter_y,
+   boost_blast_radius,
+   boost_debris_per_frame
+  )
  end
 
  if update(update_cave) then
@@ -181,14 +177,13 @@ function _update60()
     chunk_length,
     chunk_y1 + next_slice[1],
     chunk_y1 + next_slice[2],
-    next_slice[3],
-    next_slice[4]
+    next_slice.rocks
    )
-   cave_y1 = cave_get(cave_roof, chunk_length)
-   cave_y2 = cave_get(cave_floor, chunk_length)
+   cave_y1 = cave_roof_y(chunk_length)
+   cave_y2 = cave_floor_y(chunk_length)
    cave_height = cave_y2 - cave_y1
-   coin_height = cave_get(cave_roof, 128) + ((
-    cave_get(cave_floor, 128) - cave_get(cave_roof, 128)
+   coin_height = cave_roof_y(128) + ((
+    cave_floor_y(128) - cave_roof_y(128)
    ) / 2) - 4
   end
  end
@@ -228,30 +223,34 @@ function _update60()
   hitbox_x2 = hitbox_x1 + 8
   hitbox_y2 = hitbox_y1 + 6
 
+  -- Only an actual timed boost grants collision protection. The temporary
+  -- always-on tunneling test still carves terrain, but is no longer permanent
+  -- invincibility.
+  local blast_active = boost_engaged_frame ~= nil
+
   for x = hitbox_x1,hitbox_x2 do
-   local i = x
-   local roof = cave_get(cave_roof, i)
-   local floor = cave_get(cave_floor, i)
-   local rock_top = cave_get(cave_rock_top, i)
-   local rock_bottom = cave_get(cave_rock_bottom, i)
-   for y = hitbox_y1,hitbox_y2 do
-    local i = flr(x)
-    if y < cave_get(cave_roof, i) then
-     rotor_collision()
-     goto boom
-    end
-    if y > cave_get(cave_floor, i) then
-     helicopter_collision()
-     goto boom
-    end
-    if rock_top ~= nil and rock_bottom ~= nil then
-     if y >= rock_top and y <= rock_bottom then
-      if y < helicopter_y - 2 then
-       rotor_collision()
-      else
-       helicopter_collision()
-      end
+   local i = flr(x)
+   if not blast_active then
+    local roof = cave_roof_y(i)
+    local floor = cave_floor_y(i)
+    for y = hitbox_y1,hitbox_y2 do
+     if y < roof then
+      rotor_collision()
       goto boom
+     end
+     if y > floor then
+      helicopter_collision()
+      goto boom
+     end
+     for span in all(cave_spans(i)) do
+      if span.rock ~= nil and y >= span.top and y <= span.bottom then
+       if y < helicopter_y - 2 then
+        rotor_collision()
+       else
+        helicopter_collision()
+       end
+       goto boom
+      end
      end
     end
    end
@@ -281,6 +280,7 @@ function _update60()
         y = coin.y1+2,
         vx = -2+rnd(4),
         vy = helicopter_vy + rnd(8) * (rnd(2) - 1),
+        age = 0,
        })
       end
      end
@@ -299,7 +299,8 @@ function _update60()
  if update(update_debris) then
   for d in all(debris) do
    d.x -= cave_vx
-   if d.x <= 0 or d.x >= 128 then
+   d.age += 1
+   if d.x <= 0 or d.x >= 128 or d.age > 120 then
     del(debris, d)
     goto continue_debris
    end
@@ -318,11 +319,11 @@ function _update60()
    local i = flr(d.x)
    if i > 128 or i < 1 then
     -- ignore out of screen debris
-   elseif d.y + flr(d.vy) < cave_get(cave_roof, i) then
+   elseif d.y + flr(d.vy) < cave_roof_y(i) then
     -- debris hits roof
     d.vy *= rnd(0.5) * - 1
     d.vx = rnd(0.2)
-   elseif d.y + flr(d.vy) > cave_get(cave_floor, i) then
+   elseif d.y + flr(d.vy) > cave_floor_y(i) then
     -- debris hits floor
     d.vy *= rnd(0.3) * - 1
     d.vx = rnd(0.2)
@@ -353,27 +354,39 @@ function _update60()
     local x1 = 120
     local cx1 = x1
 
-    local top = cave_roof
-    local btm = cave_floor
+    local top = nil   -- will be filled: y of the boundary above the coin gap
+    local btm = nil   -- y of the boundary below the coin gap
 
-    local crt0 = cave_get(cave_rock_top, x1)
-    local crt00 = cave_get(cave_rock_top, x1+10)
-    if crt0 or crt00 then
-     if crt00 then
-      cx1 += 10
-     end
-     top_gap = abs(cave_get(cave_roof, cx1) - cave_get(cave_rock_top, cx1))
-     btm_gap = abs(cave_get(cave_floor, cx1) - cave_get(cave_rock_bottom, cx1))
-     if top_gap > btm_gap then
-      btm = cave_rock_top
-     else
-      top = cave_rock_bottom
-     end
+    -- find a rock span at column x1 (prefer x1+10 if present)
+    local rock_span = nil
+    for span in all(cave_spans(x1)) do
+     if span.rock ~= nil then rock_span = span end
+    end
+    local rock_span2 = nil
+    for span in all(cave_spans(x1 + 10)) do
+     if span.rock ~= nil then rock_span2 = span end
     end
 
-    local y1 = cave_get(top, cx1) + ((
-     cave_get(btm, cx1) - cave_get(top, cx1)
-    ) / 2) - 4
+    if rock_span or rock_span2 then
+     if rock_span2 then
+      cx1 += 10
+      rock_span = rock_span2
+     end
+     top_gap = abs(cave_roof_y(cx1) - rock_span.top)
+     btm_gap = abs(cave_floor_y(cx1) - rock_span.bottom)
+     if top_gap > btm_gap then
+      top = cave_roof_y(cx1)
+      btm = rock_span.top
+     else
+      top = rock_span.bottom
+      btm = cave_floor_y(cx1)
+     end
+    else
+     top = cave_roof_y(cx1)
+     btm = cave_floor_y(cx1)
+    end
+
+    local y1 = top + ((btm - top) / 2) - 4
 
     local x2 = x1+9
     local y2 = y1+9
@@ -464,63 +477,109 @@ function _draw()
 
  if draw(draw_cave) then
 
-
-  bright = 7
-  dim = 1
-  for i = 1, 128 do
-   cave_roof_edge_colors[i] = dim
-   cave_floor_edge_colors[i] = dim
-   if helicopter_x < i then
-    if helicopter_collision_frame == nil then
-     if helicopter_y - cave_get(cave_roof, i) - i/2 < 2 then
-      cave_roof_edge_colors[i] = bright
-     end
-     if cave_get(cave_floor, i) - helicopter_y - i/2 < 8 then
-      cave_floor_edge_colors[i] = bright
-     end
-    else
-     cave_roof_edge_colors[i] = dim
-     cave_floor_edge_colors[i] = dim
-    end
-   end
-  end
+  local bright = 7
+  local dim = 1
 
   for i = 1,128 do
    local x = i
-   local roof = cave_get(cave_roof, i)
-   local floor = cave_get(cave_floor, i)
+   local roof = cave_roof_y(i)
+   local floor = cave_floor_y(i)
+
+   -- wall fill
    line(x, camera_y1, x, roof, 5)
-   line(x, roof, x, roof - cave_get(cave_roof_blur_heights, i), cave_roof_blur_colors[i])
-   line(x, roof, x, roof - cave_get(cave_roof_edge_heights, i), cave_roof_edge_colors[i])
    line(x, floor, x, camera_y2, 5)
-   line(x, floor, x, floor + cave_get(cave_floor_blur_heights, i), cave_floor_blur_colors[i])
-   line(x, floor, x, floor + cave_get(cave_floor_edge_heights, i), cave_floor_edge_colors[i])
 
-   local rock_top = cave_get(cave_rock_top, i)
-   local rock_bottom = cave_get(cave_rock_bottom, i)
-   if rock_top ~= nil and rock_bottom ~= nil then
-    line(x, rock_top, x, rock_bottom, 5)
+   -- roof/floor blur + edge, derived from neighbours on the fly.
+   -- band height = how much a neighbour protrudes into the cave, not
+   -- the neighbour's full position (avoids tall blue zones on cliffs).
+   local roof_protrude = 0
+   local floor_protrude = 0
+   for d = -2, 2 do
+    if d ~= 0 then
+     local nr = cave_roof_y(i + d)
+     local nf = cave_floor_y(i + d)
+     if roof - nr > roof_protrude then roof_protrude = roof - nr end
+     if nf - floor > floor_protrude then floor_protrude = nf - floor end
+    end
+   end
 
-    local rock_top_blur = cave_get(cave_rock_top_blur_heights, i)
-    local rock_top_edge = cave_get(cave_rock_top_edge_heights, i)
-    line(x, rock_top, x, rock_top - rock_top_blur, 1)
+   -- roof: short blur band + crisp edge where a neighbour dips
+   roof_protrude = min(roof_protrude, 3)
+   if roof_protrude > 0 then
+    line(x, roof - roof_protrude, x, roof, 1)
+   end
+   local roof_edge_col = dim
+   if helicopter_x < i and helicopter_collision_frame == nil
+     and helicopter_y - roof - i/2 < 2 then
+    roof_edge_col = bright
+   end
+   if roof_protrude > 0 then
+    line(x, roof - roof_protrude, x, roof - roof_protrude, roof_edge_col)
+   end
 
-    local rock_bottom_blur = cave_get(cave_rock_bottom_blur_heights, i)
-    local rock_bottom_edge = cave_get(cave_rock_bottom_edge_heights, i)
-    line(x, rock_bottom, x, rock_bottom + rock_bottom_blur, 1)
+   -- floor: short blur band + crisp edge where a neighbour rises
+   floor_protrude = min(floor_protrude, 3)
+   if floor_protrude > 0 then
+    line(x, floor, x, floor + floor_protrude, 1)
+   end
+   local floor_edge_col = dim
+   if helicopter_x < i and helicopter_collision_frame == nil
+     and floor - helicopter_y - i/2 < 8 then
+    floor_edge_col = bright
+   end
+   if floor_protrude > 0 then
+    line(x, floor + floor_protrude, x, floor + floor_protrude, floor_edge_col)
+   end
 
-    if helicopter_x < i and helicopter_collision_frame == nil then
-     local rock_top_edge_color = 1
-     if helicopter_y - rock_top - i/2 < 8 then
-      rock_top_edge_color = 7
+   -- rocks: every span with an identity, drawn independently
+   for span in all(cave_spans(i)) do
+    if span.rock ~= nil then
+     local rock_top = span.top
+     local rock_bottom = span.bottom
+     line(x, rock_top, x, rock_bottom, 5)
+
+     -- rock top/bottom blur, derived from same-rock neighbours.
+     -- the blur/edge band is only as tall as the *amount* a neighbour
+     -- protrudes (its top being lower / bottom being higher), not the
+     -- full distance to that neighbour — otherwise a steep taper paints
+     -- a tall blue column into the cave.
+     local rt_protrude = 0
+     local rb_protrude = 0
+     for d = -2, 2 do
+      if d ~= 0 then
+       for nb in all(cave_spans(i + d)) do
+        if nb.rock == span.rock then
+         if rock_top - nb.top > rt_protrude then rt_protrude = rock_top - nb.top end
+         if nb.bottom - rock_bottom > rb_protrude then rb_protrude = nb.bottom - rock_bottom end
+        end
+       end
+      end
      end
-     line(x, rock_top, x, rock_top - rock_top_edge, rock_top_edge_color)
 
-     local rock_bottom_edge_color = 1
-     if rock_bottom - helicopter_y - i/2 < 8 then
-      rock_bottom_edge_color = 7
+     -- short blur band above the rock top / below the rock bottom.
+     -- capped so a steep rock taper doesn't paint a tall solid band.
+     rt_protrude = min(rt_protrude, 3)
+     rb_protrude = min(rb_protrude, 3)
+     if rt_protrude > 0 then
+      line(x, rock_top - rt_protrude, x, rock_top, 1)
      end
-     line(x, rock_bottom, x, rock_bottom + rock_bottom_edge, rock_bottom_edge_color)
+     if rb_protrude > 0 then
+      line(x, rock_bottom, x, rock_bottom + rb_protrude, 1)
+     end
+
+     if helicopter_x < i and helicopter_collision_frame == nil then
+      local rt_edge_col = 1
+      if helicopter_y - rock_top - i/2 < 8 then rt_edge_col = 7 end
+      if rt_protrude > 0 then
+       line(x, rock_top - rt_protrude, x, rock_top - rt_protrude, rt_edge_col)
+      end
+
+      local rb_edge_col = 1
+      if rock_bottom - helicopter_y - i/2 < 8 then rb_edge_col = 7 end
+      if rb_protrude > 0 then
+       line(x, rock_bottom + rb_protrude, x, rock_bottom + rb_protrude, rb_edge_col)
+      end
+     end
     end
    end
   end
@@ -580,13 +639,13 @@ end
 
   for x = hitbox_x1,hitbox_x2 do
    local i = x
-   pset(x, cave_get(cave_floor, i), 11)
-   pset(x, cave_get(cave_roof, i), 11)
-   local rock_top = cave_get(cave_rock_top, i)
-   local rock_bottom = cave_get(cave_rock_bottom, i)
-   if rock_top ~= nil and rock_bottom ~= nil then
-    pset(x, rock_top, 11)
-    pset(x, rock_bottom, 11)
+   pset(x, cave_floor_y(i), 11)
+   pset(x, cave_roof_y(i), 11)
+   for span in all(cave_spans(i)) do
+    if span.rock ~= nil then
+     pset(x, span.top, 11)
+     pset(x, span.bottom, 11)
+    end
    end
   end
 
@@ -620,14 +679,7 @@ end
    circ(puff.x, puff.y, puff.radius, 5)
   end
 
-  for b in all(booms) do
-   local p = b.age / b.life
-   local r = p * 16
-   circ(helicopter_x, helicopter_y, r, 7)
-   if r >= 1 then
-    circ(helicopter_x, helicopter_y, r - 1, 8)
-   end
-  end
+
  end
 
  camera(0, 0)
@@ -679,95 +731,131 @@ end
  end
 end
 
-function add_cave(ci, new_roof, new_floor, rock_top_offset, rock_bottom_offset)
- cave_set(cave_roof, ci, new_roof)
- cave_set(cave_floor, ci, new_floor)
+-- subtract a circular blast from every kind of solid terrain
+function carve_terrain(cx, cy, radius, debris_budget)
+ debris_budget = debris_budget or 0
+ local x1 = max(1, flr(cx - radius))
+ local x2 = min(128, flr(cx + radius))
 
- local cave_center = (new_roof + new_floor) / 2
- local new_rock_top = nil
- local new_rock_bottom = nil
+ for x = x1, x2 do
+  local dx = x - cx
+  local dy = sqrt(max(0, radius^2 - dx^2))
+  local blast_top = cy - dy
+  local blast_bottom = cy + dy
+  local roof = cave_roof_y(x)
+  local floor = cave_floor_y(x)
 
- if rock_top_offset ~= nil and rock_bottom_offset ~= nil then
-  new_rock_top = cave_center + rock_top_offset
-  new_rock_bottom = cave_center + rock_bottom_offset
- end
+  -- If the blast is wholly beyond a wall, preserve the solid mass between
+  -- the old cave and the new tunnel as an internal span. The outer edge of
+  -- the blast becomes the new roof/floor heightfield.
+  if blast_top < roof then
+   if blast_bottom < roof then
+    add_span(x, tunnel_roof_rock, blast_bottom, roof)
+    debris_budget = carve_debris(x, blast_top, blast_bottom, debris_budget)
+   else
+    debris_budget = carve_debris(x, blast_top, roof, debris_budget)
+   end
+   cave_set_roof(x, blast_top)
+  end
+  if blast_bottom > floor then
+   if blast_top > floor then
+    add_span(x, tunnel_floor_rock, floor, blast_top)
+    debris_budget = carve_debris(x, blast_top, blast_bottom, debris_budget)
+   else
+    debris_budget = carve_debris(x, floor, blast_bottom, debris_budget)
+   end
+   cave_set_floor(x, blast_bottom)
+  end
 
- cave_set(cave_rock_top, ci, new_rock_top)
- cave_set(cave_rock_bottom, ci, new_rock_bottom)
+  -- Internal spans can be shortened, removed, or split in two.
+  local list = cave_spans_arr[cave_index(x)]
+  if list ~= nil then
+   for i = #list, 1, -1 do
+    local span = list[i]
+    if blast_top < span.bottom and blast_bottom > span.top then
+     local old_top = span.top
+     local old_bottom = span.bottom
+     local cut_top = max(old_top, blast_top)
+     local cut_bottom = min(old_bottom, blast_bottom)
+     debris_budget = carve_debris(x, cut_top, cut_bottom, debris_budget)
 
- local from = max(1, ci - 4)
- local to = min(chunk_length-1, ci + 4)
-
- for i = from, to do
-  local roof = cave_get(cave_roof, i)
-  local floor = cave_get(cave_floor, i)
-
-  cave_set(cave_floor_blur_heights, i, tminmax(max, {
-   floor,
-   tgad_cave(cave_floor, i - 1, 1, floor + 2),
-   tgad_cave(cave_floor, i - 2, 1, floor + 2),
-   tgad_cave(cave_floor, i + 1, 1, floor + 2),
-   tgad_cave(cave_floor, i + 2, 1, floor + 2),
-  }) - floor)
-
-  cave_set(cave_floor_edge_heights, i, tminmax(max, {
-   floor,
-   tgad_cave(cave_floor, i - 1, 0, floor),
-   tgad_cave(cave_floor, i + 1, 0, floor),
-  }) - floor)
-
-  cave_set(cave_roof_blur_heights, i, roof - tminmax(min, {
-   roof,
-   tgad_cave(cave_roof, i - 1, -1, roof),
-   tgad_cave(cave_roof, i - 2, -1, roof),
-   tgad_cave(cave_roof, i + 1, -1, roof),
-   tgad_cave(cave_roof, i + 2, -1, roof),
-  }))
-
-  cave_set(cave_roof_edge_heights, i, roof - tminmax(min, {
-   roof,
-   tgad_cave(cave_roof, i - 1, 0, roof),
-   tgad_cave(cave_roof, i + 1, 0, roof),
-  }))
-
-  local rock_top = cave_get(cave_rock_top, i)
-  local rock_bottom = cave_get(cave_rock_bottom, i)
-
-  if rock_top ~= nil and rock_bottom ~= nil then
-   cave_set(cave_rock_top_blur_heights, i, rock_top - tminmax(min, {
-    rock_top,
-    tgad_cave(cave_rock_top, i - 1, -1, rock_top),
-    tgad_cave(cave_rock_top, i - 2, -1, rock_top),
-    tgad_cave(cave_rock_top, i + 1, -1, rock_top),
-    tgad_cave(cave_rock_top, i + 2, -1, rock_top),
-   }))
-
-   cave_set(cave_rock_top_edge_heights, i, rock_top - tminmax(min, {
-    rock_top,
-    tgad_cave(cave_rock_top, i - 1, 0, rock_top),
-    tgad_cave(cave_rock_top, i + 1, 0, rock_top),
-   }))
-
-   cave_set(cave_rock_bottom_blur_heights, i, tminmax(max, {
-    rock_bottom,
-    tgad_cave(cave_rock_bottom, i - 1, 1, rock_bottom + 2),
-    tgad_cave(cave_rock_bottom, i - 2, 1, rock_bottom + 2),
-    tgad_cave(cave_rock_bottom, i + 1, 1, rock_bottom + 2),
-    tgad_cave(cave_rock_bottom, i + 2, 1, rock_bottom + 2),
-   }) - rock_bottom)
-
-   cave_set(cave_rock_bottom_edge_heights, i, tminmax(max, {
-    rock_bottom,
-    tgad_cave(cave_rock_bottom, i - 1, 0, rock_bottom),
-    tgad_cave(cave_rock_bottom, i + 1, 0, rock_bottom),
-   }) - rock_bottom)
-  else
-   cave_set(cave_rock_top_blur_heights, i, 0)
-   cave_set(cave_rock_top_edge_heights, i, 0)
-   cave_set(cave_rock_bottom_blur_heights, i, 0)
-   cave_set(cave_rock_bottom_edge_heights, i, 0)
+     if blast_top <= old_top and blast_bottom >= old_bottom then
+      deli(list, i)
+     elseif blast_top <= old_top then
+      span.top = blast_bottom
+     elseif blast_bottom >= old_bottom then
+      span.bottom = blast_top
+     else
+      span.bottom = blast_top
+      add(list, {
+       rock = span.rock,
+       top = blast_bottom,
+       bottom = old_bottom,
+      })
+     end
+    end
+   end
+   sort_spans(list)
   end
  end
+end
+
+function carve_debris(x, y1, y2, budget)
+ if budget <= 0 or y2 <= y1 then return budget end
+ add(debris, {
+  color = choose({5,6,7,11,12,13}),
+  x = x,
+  y = y1 + rnd(y2 - y1),
+  vx = -2 + rnd(4),
+  vy = -2 + rnd(4),
+  age = 0,
+ })
+ return budget - 1
+end
+
+function sort_spans(list)
+ for i = 2, #list do
+  local j = i
+  while j > 1 and list[j].top < list[j - 1].top do
+   list[j], list[j - 1] = list[j - 1], list[j]
+   j -= 1
+  end
+ end
+end
+
+function add_cave(ci, new_roof, new_floor, rock_samples)
+ -- walls stored as two plain circular arrays (roof/floor); rocks as spans
+ cave_set_roof(ci, new_roof)
+ cave_set_floor(ci, new_floor)
+
+ -- this column is being (re)written for the incoming chunk, so discard
+ -- any spans a previous chunk left in this circular-buffer slot. Without
+ -- this, wrapping slots accumulate stale rock spans over time.
+ cave_spans_arr[cave_index(ci)] = nil
+
+ -- rock_samples is a stable list of {top_offset,bottom_offset} pairs.
+ -- Keeping absent rocks as empty pairs preserves each stacked rock's slot.
+ rock_samples = rock_samples or empty_spans
+ local cave_center = (new_roof + new_floor) / 2
+ local slots = max(#rock_samples, rock_slot_count)
+
+ for slot = 1, slots do
+  local sample = rock_samples[slot]
+  local rock_top_offset = sample and sample[1]
+  local rock_bottom_offset = sample and sample[2]
+  if rock_top_offset == nil or rock_bottom_offset == nil then
+   rock_chain[slot] = nil
+  else
+   local rock = rock_chain[slot]
+   if rock == nil then
+    rock = {id = next_rock_id}
+    next_rock_id += 1
+    rock_chain[slot] = rock
+   end
+   add_span(ci, rock, cave_center + rock_top_offset, cave_center + rock_bottom_offset)
+  end
+ end
+ rock_slot_count = #rock_samples
 end
 
 function mode(m)
@@ -827,23 +915,18 @@ function mode(m)
   local start_roof = start_slice[1]
   local start_floor = start_slice[2]
 
-  cave_floor = fill(chunk_length, start_floor)
-  cave_floor_blur_colors = fill(chunk_length, 1)
-  cave_floor_blur_heights = fill(chunk_length, 0)
-  cave_floor_edge_colors = fill(chunk_length, 7)
-  cave_floor_edge_heights = fill(chunk_length, 0)
-  cave_roof = fill(chunk_length, start_roof)
-  cave_roof_blur_colors = fill(chunk_length, 1)
-  cave_roof_blur_heights = fill(chunk_length, 0)
-  cave_roof_edge_colors = fill(chunk_length, 7)
-  cave_roof_edge_heights = fill(chunk_length, 0)
-
-  cave_rock_top = {}
-  cave_rock_bottom = {}
-  cave_rock_top_blur_heights = fill(chunk_length, 0)
-  cave_rock_top_edge_heights = fill(chunk_length, 0)
-  cave_rock_bottom_blur_heights = fill(chunk_length, 0)
-  cave_rock_bottom_edge_heights = fill(chunk_length, 0)
+  -- span-based terrain: walls + rocks as per-column span lists
+  cave_roof_arr = fill(chunk_length, start_roof)
+  cave_floor_arr = fill(chunk_length, start_floor)
+  cave_spans_arr = {}
+  next_rock_id = 1
+  -- Wall masses isolated by tunneling become ordinary internal spans.
+  tunnel_roof_rock = {id = next_rock_id}
+  next_rock_id += 1
+  tunnel_floor_rock = {id = next_rock_id}
+  next_rock_id += 1
+  rock_chain = {}
+  rock_slot_count = 0
 
   cave_head = 1
 
@@ -853,11 +936,11 @@ function mode(m)
 
   for x = 1,chunk_length do
    local slice = chunk_fn(x/chunk_length)
-   add_cave(x, slice[1], slice[2], slice[3], slice[4])
+   add_cave(x, slice[1], slice[2], slice.rocks)
   end
 
-  cave_y1 = cave_get(cave_roof, chunk_length)
-  cave_y2 = cave_get(cave_floor, chunk_length)
+  cave_y1 = cave_roof_y(chunk_length)
+  cave_y2 = cave_floor_y(chunk_length)
   chunk_y1 = cave_y1
 
   coins = {}
@@ -906,43 +989,6 @@ function mode(m)
  end
 end
 
-function tgad(t, g, a, d)
- if t[g] == nil or t[g] == nil then
-  return d
- else
-  return t[g] + a
- end
-end
-
--- tgad for circular buffer cave arrays
-function tgad_cave(t, g, a, d)
- if g < 1 or g > chunk_length then
-  return d
- end
- local v = cave_get(t, g)
- if v == nil then
-  return d
- else
-  return v + a
- end
-end
-
-function tminmax(fn, t)
- if #t == 0 then
-  return nil
- elseif #t == 1 then
-  return t[1]
- else
-  local m = t[1]
-  for i = 2, #t do
-   m = fn(m, t[i])
-  end
-  return m
- end
-end
-
-
-
 
 function nearest(t, n)
  local v = 1
@@ -959,17 +1005,17 @@ function is_space(x, y)
  if i > 128 or i < 1 then
   return true
  end
- if y < cave_get(cave_roof, i) then
+ if y < cave_roof_y(i) then
   return false
  end
- if y > cave_get(cave_floor, i) then
+ if y > cave_floor_y(i) then
   return false
  end
- local rock_top = cave_get(cave_rock_top, i)
- local rock_bottom = cave_get(cave_rock_bottom, i)
- if rock_top ~= nil and rock_bottom ~= nil then
-  if y >= rock_top and y <= rock_bottom then
-   return false
+ for span in all(cave_spans(i)) do
+  if span.rock ~= nil then
+   if y >= span.top and y <= span.bottom then
+    return false
+   end
   end
  end
  return true
@@ -992,6 +1038,7 @@ function rotor_collision()
     y = helicopter_y + 4,
     vx = -2 + rnd(4),
     vy = 0 - rnd(2),
+    age = 0,
    })
   end
 
@@ -1012,7 +1059,7 @@ function helicopter_collision()
  camera_shake_intensity = 10
  camera_shake_decay = 0.85
 
- helicopter_y = min(helicopter_y, cave_get(cave_floor, helicopter_x) - 2)
+ helicopter_y = min(helicopter_y, cave_floor_y(helicopter_x) - 2)
 
  for i = 1,128 do
   add(debris, {
@@ -1021,6 +1068,7 @@ function helicopter_collision()
    y = helicopter_y,
    vx = -1 + rnd(2),
    vy = 0 - rnd(2),
+   age = 0,
   })
  end
 
@@ -1095,8 +1143,10 @@ function last(t)
  return t[#t]
 end
 
-function chunk(y1, y2, rock_top, rock_bottom)
- local c = {y1, y2, rock_top, rock_bottom}
+function chunk(y1, y2, ...)
+ -- each trailing argument is a {top_fn,bottom_fn} rock pair
+ local c = {y1, y2}
+ c.rocks = {...}
  setmetatable(c, {
   __add = chunk_add,
   __and = chunk_and,
@@ -1106,19 +1156,19 @@ function chunk(y1, y2, rock_top, rock_bottom)
 end
 
 function chunk_add(c1, c2)
+ -- combining chunks preserves every rock instead of choosing only one
+ local rocks = {}
+ for r in all(c1.rocks) do add(rocks, r) end
+ for r in all(c2.rocks) do add(rocks, r) end
  return chunk(
   terrain_add_nil(c1[1], c2[1]),
   terrain_add_nil(c1[2], c2[2]),
-  c1[3] or c2[3],
-  c1[4] or c2[4]
+  unpack(rocks)
  )
 end
 
 function chunk_and(c1, c2)
- for y in all(c2) do
-  add(c1, y)
- end
- return c1
+ return chunk_add(c1, c2)
 end
 
 function chunk_call(c, p)
@@ -1127,18 +1177,20 @@ function chunk_call(c, p)
   local t = c[i]
   if t ~= nil then
    local y = t(p)
-   if y ~= nil then
-    add(v, y)
-   end
+   if y ~= nil then add(v, y) end
   end
  end
  sort(v)
- local rock_top = nil
- local rock_bottom = nil
- if c[3] ~= nil then rock_top = c[3](p) end
- if c[4] ~= nil then rock_bottom = c[4](p) end
- add(v, rock_top)
- add(v, rock_bottom)
+
+ -- Keep one sample pair per rock even when that rock is absent at p.
+ -- Stable slots let add_cave maintain separate identities for stacked rocks.
+ v.rocks = {}
+ for r in all(c.rocks) do
+  add(v.rocks, {
+   r[1] and r[1](p) or nil,
+   r[2] and r[2](p) or nil,
+  })
+ end
  return v
 end
 
@@ -1457,23 +1509,32 @@ function rock(p_center, width, height, offset_y, shape)
  return chunk(
   nil,
   nil,
-  terrain(function(p)
-   if p >= p_start and p <= p_end then
-    local rock_p = (p - p_start) / width
-    local taper = shape(rock_p)
-    return offset_y - half_height * taper
-   end
-   return nil
-  end),
-  terrain(function(p)
-   if p >= p_start and p <= p_end then
-    local rock_p = (p - p_start) / width
-    local taper = shape(rock_p)
-    return offset_y + half_height * taper
-   end
-   return nil
-  end)
+  {
+   terrain(function(p)
+    if p >= p_start and p <= p_end then
+     local rock_p = (p - p_start) / width
+     local taper = shape(rock_p)
+     return offset_y - half_height * taper
+    end
+    return nil
+   end),
+   terrain(function(p)
+    if p >= p_start and p <= p_end then
+     local rock_p = (p - p_start) / width
+     local taper = shape(rock_p)
+     return offset_y + half_height * taper
+    end
+    return nil
+   end)
+  }
  )
+end
+
+-- two rocks sharing the same columns, offset vertically so they stack.
+-- stresses the span model's ability to hold multiple rocks per column.
+function stacked_rocks(p_center, width, height, top_offset, gap)
+ local bottom_offset = top_offset + height + gap
+ return rock(p_center, width, height, top_offset) + rock(p_center, width, height, bottom_offset)
 end
 
 function biome_start()
@@ -1536,7 +1597,13 @@ function biome_normal()
  biome_id = "normal"
  biome_next_chunk = function()
   if biome_chunk_count < 1 then
-   local rock_chunk = rock(0.5, 0.1, 24, -12 + rnd(24))
+   -- occasionally stack two rocks vertically to exercise the span model
+   local rock_chunk
+   if flrrnd(3) == 0 then
+    rock_chunk = stacked_rocks(0.5, 0.1, 16, -30 + rnd(20), 14)
+   else
+    rock_chunk = rock(0.5, 0.1, 24, -12 + rnd(24))
+   end
    return tunnel(0, 110) + sinechunk(16, 0.5) + rock_chunk
   end
  end
@@ -1619,12 +1686,51 @@ function draw_bar(l, p, x, y)
  print(l, x+17, y-1, 7)
 end
 
-function cave_get(t, i)
- return t[((cave_head + i - 2) % chunk_length) + 1]
+-- circular-buffer index for the span arrays
+function cave_index(i)
+ return ((cave_head + i - 2) % chunk_length) + 1
 end
 
-function cave_set(t, i, v)
- t[((cave_head + i - 2) % chunk_length) + 1] = v
+function cave_roof_y(i)
+ return cave_roof_arr[cave_index(i)]
+end
+
+function cave_floor_y(i)
+ return cave_floor_arr[cave_index(i)]
+end
+
+function cave_set_roof(i, v)
+ cave_roof_arr[cave_index(i)] = v
+end
+
+function cave_set_floor(i, v)
+ cave_floor_arr[cave_index(i)] = v
+end
+
+-- shared empty list so cave_spans() never allocates when a column has no rock
+empty_spans = {}
+
+-- all spans in a column (walls are not stored here; only rocks carry spans)
+function cave_spans(i)
+ local l = cave_spans_arr[cave_index(i)]
+ if l == nil then return empty_spans end
+ return l
+end
+
+function add_span(i, rock, top, bottom)
+ local idx = cave_index(i)
+ local list = cave_spans_arr[idx]
+ if list == nil then
+  list = {}
+  cave_spans_arr[idx] = list
+ end
+ add(list, {rock = rock, top = top, bottom = bottom})
+ -- keep sorted by top
+ for k = #list, 2, -1 do
+  if list[k].top < list[k - 1].top then
+   list[k], list[k - 1] = list[k - 1], list[k]
+  end
+ end
 end
 
 __gfx__
