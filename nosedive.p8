@@ -40,7 +40,7 @@ function _init()
  draw_enable(draw_cave)
  draw_enable(draw_helicopter)
  draw_enable(draw_rotor)
- draw_enable(draw_hitbox)
+ -- draw_enable(draw_hitbox)
  draw_enable(draw_coins)
  draw_enable(draw_debris)
  draw_enable(draw_debug)
@@ -52,21 +52,38 @@ function _init()
  camera_x1 = 0
  camera_y1 = 0
  boost_engaged_frame = nil
- boost_duration = 128
+ boost_charge_armed = false
  boost_blast_radius = 10
  boost_debris_per_frame = 3
- boost_tunnel_always_on = false
+ tunnel_powerup_duration = 64
+ tunnel_powerup_grace = 16
+ tunnel_powerup_frame = nil
+ tunnel_last_carve_frame = nil
+ tunnel_powerup_active = false
+ coin_cooldown_slow = 48
+ coin_cooldown_fast = 16
+ coin_reachable_y = 24
+ coin_fuel_gain = 16
+ fuel_drain_slow = 8
+ fuel_drain_fast = 4
+ fuel_drain_interval = fuel_drain_slow
  fuel = 64
  fuel_max = 64
+ fuel_empty_threshold = 32
+ fuel_speed3_threshold = 48
+ speed_up_flash_duration = 32
+ speed_up_frame = nil
  fuel_gained_frame = nil
  fuel_gained_from = 0
+ death_min_frames = 120
+ dead_age = 0
  mode("menu")
 end
 
 function _update60()
  clock_frame += 1
 
- if update(update_fuel) and clock_frame % 8 == 0 then
+ if update(update_fuel) and clock_frame % fuel_drain_interval == 0 then
   fuel = max(0, fuel - 1)
  end
 
@@ -76,71 +93,88 @@ function _update60()
   end
  end
 
- if update(update_dead) then
-  if btnp() > 0 then
+ -- Drive the lockout from the visible death state itself, so if the death
+ -- screen is drawn its timer is guaranteed to advance.
+ if draw(draw_dead) then
+  dead_age += 1
+  if dead_age >= death_min_frames and (btn(4) or btn(5)) then
    mode("menu")
   end
  end
 
  if update(update_camera) then
+  -- Don't chase the cave center: angular terrain made that oscillation
+  -- nauseating. Keep the camera still inside a generous player dead zone,
+  -- then follow gently only as the helicopter approaches a screen edge.
+  local screen_y = helicopter_y - camera_y1
+  camera_ideal_y1 = camera_y1
 
-  if rotor_collision_frame and helicopter_y-64>camera_y1 then
-   camera_ideal_y1 = helicopter_y-64
-  else
-   camera_ideal_y1 = avg({
-    cave_roof_y(32) + 1,
-    cave_floor_y(32),
-    cave_roof_y(96) + 1,
-    cave_floor_y(96),
-   }) - 64
+  if rotor_collision_frame then
+   camera_ideal_y1 = helicopter_y - 64
+  elseif screen_y < 44 then
+   camera_ideal_y1 = helicopter_y - 44
+  elseif screen_y > 84 then
+   camera_ideal_y1 = helicopter_y - 84
   end
 
-  camera_offset_y1 = camera_y1 - camera_ideal_y1
+  camera_offset_y1 = camera_ideal_y1 - camera_y1
   camera_error_y1 = abs(camera_offset_y1)
-
-  if camera_error_y1 < 1 then
-   camera_error_count = 0
-  else
-   camera_error_count += 1
-  end
-
-  camera_vy = flr(
-   camera_offset_y1
-   * (camera_error_count / 256)
-   * -1
-  )
+  -- Fast enough to catch the helicopter at terminal velocity, while the
+  -- proportional response keeps small corrections from snapping.
+  camera_vy = mid(-3, camera_offset_y1 * 0.25, 3)
 
   camera_y1 += camera_vy
   camera_y2 = camera_y1 + 128
  end
 
- if btn(4) and boost_engaged_frame == nil then
-  boost_engaged_frame = clock_frame
-  cave_vx = 2
-  add(booms, {
-   age = 0,
-   life = boost_duration,
-   radius = boost_blast_radius,
-  })
- end
+ if update(update_fuel) then
+  -- Each time a non-full gauge is filled back to max, advance one speed
+  -- tier: 1→2, then 2→3. Starting a run at max does not trigger it.
+  if fuel < fuel_max then boost_charge_armed = true end
+  if boost_charge_armed and fuel >= fuel_max and cave_vx < 3 then
+   boost_engaged_frame = clock_frame
+   tunnel_powerup_frame = clock_frame
+   tunnel_last_carve_frame = clock_frame
+   boost_charge_armed = false
+   set_cave_vx(cave_vx + 1)
+  end
 
- if boost_engaged_frame then
-  if (clock_frame - boost_engaged_frame) >= boost_duration then
+  -- Speed 3 falls back to 2 below 48 fuel; speed 2 falls back to 1 when
+  -- the empty-fuel warning becomes eligible.
+  if cave_vx >= 3 and fuel < fuel_speed3_threshold then
+   set_cave_vx(2)
+  elseif cave_vx == 2 and fuel < fuel_empty_threshold then
    boost_engaged_frame = nil
-   cave_vx = 1
+   set_cave_vx(1)
   end
  end
 
- if helicopter_x ~= nil and cave_spans_arr ~= nil
-   and (boost_tunnel_always_on or boost_engaged_frame) then
-  -- Temporary test mode: keep the carving field around the helicopter
-  -- continuously, even when boost itself is not active.
-  carve_terrain(
+ tunnel_powerup_active = false
+ if tunnel_powerup_frame ~= nil then
+  local tunnel_age = clock_frame - tunnel_powerup_frame
+  local recently_carving = tunnel_last_carve_frame ~= nil
+    and clock_frame - tunnel_last_carve_frame < tunnel_powerup_grace
+  tunnel_powerup_active = tunnel_age < tunnel_powerup_duration
+    or recently_carving
+    or helicopter_in_isolated_tunnel()
+  if not tunnel_powerup_active then
+   tunnel_powerup_frame = nil
+   tunnel_last_carve_frame = nil
+  end
+ end
+
+ if tunnel_powerup_active
+   and helicopter_x ~= nil
+   and cave_spans_arr ~= nil
+   and boost_engaged_frame ~= nil then
+  -- Briefly protect the player while a newly selected speed biome arrives.
+  local carved = carve_terrain(
    helicopter_x + 4,
    helicopter_y,
    boost_blast_radius,
    boost_debris_per_frame
   )
+  if carved then tunnel_last_carve_frame = clock_frame end
  end
 
  if update(update_cave) then
@@ -148,10 +182,12 @@ function _update60()
    cave_head = (cave_head % chunk_length) + 1
 
    chunk_progress += 1
+   local force_new_chunk = biome_policy_dirty
+     or boost_engaged_frame == clock_frame and i == 1
 
-   if chunk_progress < chunk_length and boost_engaged_frame != clock_frame then
+   if chunk_progress < chunk_length and not force_new_chunk then
     chunk_p = chunk_progress / chunk_length
-   elseif chunk_progress == chunk_length and boost_engaged_frame != clock_frame then
+   elseif chunk_progress == chunk_length and not force_new_chunk then
     chunk_p = 1
     dbg("last chunk_progress=" .. chunk_progress)
    else
@@ -161,10 +197,16 @@ function _update60()
     chunk_p = 0
     chunk_y1 = cave_y1
 
-    chunk_fn = biome_next_chunk()
-    if chunk_fn == nil then
+    if biome_policy_dirty then
      next_biome()
      chunk_fn = biome_next_chunk()
+     biome_policy_dirty = false
+    else
+     chunk_fn = biome_next_chunk()
+     if chunk_fn == nil then
+      next_biome()
+      chunk_fn = biome_next_chunk()
+     end
     end
     biome_chunk_count += 1
 
@@ -223,14 +265,9 @@ function _update60()
   hitbox_x2 = hitbox_x1 + 8
   hitbox_y2 = hitbox_y1 + 6
 
-  -- Only an actual timed boost grants collision protection. The temporary
-  -- always-on tunneling test still carves terrain, but is no longer permanent
-  -- invincibility.
-  local blast_active = boost_engaged_frame ~= nil
-
   for x = hitbox_x1,hitbox_x2 do
    local i = flr(x)
-   if not blast_active then
+   if not tunnel_powerup_active then
     local roof = cave_roof_y(i)
     local floor = cave_floor_y(i)
     for y = hitbox_y1,hitbox_y2 do
@@ -268,7 +305,7 @@ function _update60()
       coin.hit = clock_frame
       coins_count += 1
       fuel_gained_from = fuel
-      fuel = min(fuel_max, fuel + 16)
+      fuel = min(fuel_max, fuel + coin_fuel_gain)
       fuel_gained_frame = clock_frame
       camera_shake_intensity = 5
       camera_shake_decay = 0.6
@@ -351,27 +388,20 @@ function _update60()
     coin_cooldown_frame += 1
    else
     coin_cooldown_frame = 0
-    local x1 = 120
-    local cx1 = x1
+    -- Spawn fully beyond the visible 0..127 screen, attached to the
+    -- rightmost cave column so terrain and coin scroll in together.
+    local x1 = 128
+    local cx1 = 128
 
     local top = nil   -- will be filled: y of the boundary above the coin gap
     local btm = nil   -- y of the boundary below the coin gap
 
-    -- find a rock span at column x1 (prefer x1+10 if present)
     local rock_span = nil
-    for span in all(cave_spans(x1)) do
+    for span in all(cave_spans(cx1)) do
      if span.rock ~= nil then rock_span = span end
     end
-    local rock_span2 = nil
-    for span in all(cave_spans(x1 + 10)) do
-     if span.rock ~= nil then rock_span2 = span end
-    end
 
-    if rock_span or rock_span2 then
-     if rock_span2 then
-      cx1 += 10
-      rock_span = rock_span2
-     end
+    if rock_span then
      top_gap = abs(cave_roof_y(cx1) - rock_span.top)
      btm_gap = abs(cave_floor_y(cx1) - rock_span.bottom)
      if top_gap > btm_gap then
@@ -387,7 +417,23 @@ function _update60()
     end
 
     local y1 = top + ((btm - top) / 2) - 4
+    local valid_y1 = top + 1
+    local valid_y2 = btm - 10
 
+    if valid_y1 <= valid_y2 then
+     y1 = mid(valid_y1, y1, valid_y2)
+     if last_coin_y1 ~= nil then
+      local reachable_y1 = last_coin_y1 - coin_reachable_y
+      local reachable_y2 = last_coin_y1 + coin_reachable_y
+      local biased_y1 = max(valid_y1, reachable_y1)
+      local biased_y2 = min(valid_y2, reachable_y2)
+      if biased_y1 <= biased_y2 then
+       y1 = mid(biased_y1, y1, biased_y2)
+      end
+     end
+    end
+
+    last_coin_y1 = y1
     local x2 = x1+9
     local y2 = y1+9
     add(coins, {
@@ -408,12 +454,25 @@ function _update60()
    elseif rotor_engaged then
     radius = 4 - rnd(2)
    end
+   local smoke_color = 5
+   if cave_vx >= 3 then
+    smoke_color = 8
+   elseif cave_vx == 2 then
+    -- Speed-2 exhaust communicates throttle state: large powered puffs
+    -- are yellow; the smaller unpowered trail is orange.
+    if rotor_engaged then
+     smoke_color = 10
+    else
+     smoke_color = 9
+    end
+   end
    add(smoke, {
     x = helicopter_x - 8,
     y = helicopter_y,
     vx = 0,
     vy = helicopter_vy,
     radius = radius,
+    color = smoke_color,
     age = 0,
    })
   end
@@ -628,6 +687,10 @@ end
   )
  end
 
+ if tunnel_powerup_active and helicopter_x ~= nil then
+  circ(helicopter_x, helicopter_y, boost_blast_radius, 6)
+ end
+
  if draw(draw_hitbox) then
   rect(
    hitbox_x1,
@@ -676,7 +739,7 @@ end
 
  if draw(draw_smoke) then
   for i, puff in pairs(smoke) do
-   circ(puff.x, puff.y, puff.radius, 5)
+   circ(puff.x, puff.y, puff.radius, puff.color)
   end
 
 
@@ -704,13 +767,50 @@ end
   local bar_w = 32
   local bar_h = 8
 
-  -- empty (black) background
+  local fill_color = 6
+  if cave_vx == 2 then
+   fill_color = 10
+  elseif cave_vx >= 3 then
+   fill_color = 8
+  end
+
+  local border_outer = 1
+  local border_inner = 6
+  if speed_up_frame ~= nil
+    and clock_frame - speed_up_frame < speed_up_flash_duration then
+   local flash = clock_frame % 6 < 3
+   if cave_vx == 2 then
+    border_outer = flash and 9 or 10
+    border_inner = flash and 10 or 9
+   elseif cave_vx >= 3 then
+    border_outer = flash and 8 or 14
+    border_inner = flash and 14 or 8
+   end
+  end
+
+  -- Preview the next tier only if the nearest incoming coin can still fill
+  -- the gauge after accounting for fuel burned before it arrives.
+  local incoming_coin = next_incoming_coin()
+  local predicted_fuel = incoming_coin and fuel_when_coin_arrives(incoming_coin)
+  if boost_charge_armed
+    and cave_vx < 3
+    and predicted_fuel ~= nil
+    and predicted_fuel + coin_fuel_gain >= fuel_max then
+   if cave_vx == 1 then
+    border_inner = 10
+   else
+    border_inner = 8
+   end
+  end
+
+  -- two nested borders make the gauge readable against every cave color
+  rect(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + bar_h + 2, border_outer)
+  rect(bar_x - 1, bar_y - 1, bar_x + bar_w + 1, bar_y + bar_h + 1, border_inner)
   rectfill(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 0)
-  -- full (red) portion
-  rectfill(bar_x, bar_y, bar_x + bar_w * fuel_ratio, bar_y + bar_h, 8)
+  rectfill(bar_x, bar_y, bar_x + bar_w * fuel_ratio, bar_y + bar_h, fill_color)
 
   -- flash the fuel sprite centered when nearly empty
-  if fuel < 32 and (clock_frame % 64 < 32) then
+  if fuel < fuel_empty_threshold and (clock_frame % 64 < 32) then
    sspr(48, 0, 64, 17, 48, 55)
   end
  end
@@ -727,13 +827,37 @@ end
 
  if draw(draw_dead) then
   print("dead", 48, 48, 7)
-  print("tap to continue", 48, 56, 7)
+  if dead_age >= death_min_frames then
+   print("tap to continue", 48, 56, 7)
+  end
  end
+end
+
+-- True while a preserved wall mass separates the helicopter from the main
+-- cave. After the normal shield timer, this keeps tunneling active until the
+-- helicopter has actually returned to ordinary cave space.
+function helicopter_in_isolated_tunnel()
+ if helicopter_x == nil or cave_spans_arr == nil then return false end
+
+ for x = flr(helicopter_x - 4), flr(helicopter_x + 4) do
+  if x >= 1 and x <= 128 then
+   for span in all(cave_spans(x)) do
+    if span.rock == tunnel_roof_rock and helicopter_y < span.top then
+     return true
+    end
+    if span.rock == tunnel_floor_rock and helicopter_y > span.bottom then
+     return true
+    end
+   end
+  end
+ end
+ return false
 end
 
 -- subtract a circular blast from every kind of solid terrain
 function carve_terrain(cx, cy, radius, debris_budget)
  debris_budget = debris_budget or 0
+ local carved = false
  local x1 = max(1, flr(cx - radius))
  local x2 = min(128, flr(cx + radius))
 
@@ -749,6 +873,7 @@ function carve_terrain(cx, cy, radius, debris_budget)
   -- the old cave and the new tunnel as an internal span. The outer edge of
   -- the blast becomes the new roof/floor heightfield.
   if blast_top < roof then
+   carved = true
    if blast_bottom < roof then
     add_span(x, tunnel_roof_rock, blast_bottom, roof)
     debris_budget = carve_debris(x, blast_top, blast_bottom, debris_budget)
@@ -758,6 +883,7 @@ function carve_terrain(cx, cy, radius, debris_budget)
    cave_set_roof(x, blast_top)
   end
   if blast_bottom > floor then
+   carved = true
    if blast_top > floor then
     add_span(x, tunnel_floor_rock, floor, blast_top)
     debris_budget = carve_debris(x, blast_top, blast_bottom, debris_budget)
@@ -773,6 +899,7 @@ function carve_terrain(cx, cy, radius, debris_budget)
    for i = #list, 1, -1 do
     local span = list[i]
     if blast_top < span.bottom and blast_bottom > span.top then
+     carved = true
      local old_top = span.top
      local old_bottom = span.bottom
      local cut_top = max(old_top, blast_top)
@@ -798,6 +925,7 @@ function carve_terrain(cx, cy, radius, debris_budget)
    sort_spans(list)
   end
  end
+ return carved
 end
 
 function carve_debris(x, y1, y2, budget)
@@ -883,7 +1011,7 @@ function mode(m)
   draw_enable(draw_debris)
   draw_enable(draw_debug)
   draw_enable(draw_smoke)
-  draw_enable(draw_hitbox)
+  --draw_enable(draw_hitbox)
   draw_enable(draw_fuel)
 
   camera_x1 = 0
@@ -891,6 +1019,9 @@ function mode(m)
   camera_y2 = camera_y1 + 128
   camera_shake = 0
   cave_vx = 1
+  fuel_drain_interval = fuel_drain_slow
+  next_biome = next_biome_angular
+  biome_policy_dirty = false
   camera_vy = 0
   camera_ideal_y1 = camera_y1
   camera_error_y1 = 0
@@ -901,10 +1032,16 @@ function mode(m)
   chunk_length = 128 * cave_vx
   chunk_progress = 0
 
+  dead_age = 0
   boost_engaged_frame = nil
+  boost_charge_armed = false
+  tunnel_powerup_frame = nil
+  tunnel_last_carve_frame = nil
+  tunnel_powerup_active = false
   fuel = fuel_max
   fuel_gained_frame = nil
   fuel_gained_from = 0
+  speed_up_frame = nil
 
   biome_chunk_count = 0
   biome_start()
@@ -932,7 +1069,7 @@ function mode(m)
 
   coin_height = 64
   coin_cooldown_frame = clock_frame
-  coin_cooldown_limit = 48
+  coin_cooldown_limit = coin_cooldown_slow
 
   for x = 1,chunk_length do
    local slice = chunk_fn(x/chunk_length)
@@ -946,6 +1083,7 @@ function mode(m)
   coins = {}
   coins_count = 0
   coin_combo_length = 0
+  last_coin_y1 = nil
 
   debug_messages = {}
   debug_color = 8
@@ -975,6 +1113,7 @@ function mode(m)
   smoke = {}
   booms = {}
  elseif m == "dead" then
+  dead_age = 0
   update_enable(update_dead)
   update_enable(update_debris)
   update_enable(update_smoke)
@@ -1117,6 +1256,29 @@ end
 
 function loop(n, m, o)
  return flr(n % m / flr(m / o))
+end
+
+function next_incoming_coin()
+ local nearest_coin = nil
+ for coin in all(coins) do
+  if coin.hit == nil and coin.miss == nil and coin.x2 >= helicopter_x then
+   if nearest_coin == nil or coin.x1 < nearest_coin.x1 then
+    nearest_coin = coin
+   end
+  end
+ end
+ return nearest_coin
+end
+
+function fuel_when_coin_arrives(coin)
+ local distance = max(0, coin.x1 - helicopter_x)
+ local frames = distance / max(1, cave_vx)
+ local first_drain = fuel_drain_interval - (clock_frame % fuel_drain_interval)
+ local drains = 0
+ if frames >= first_drain then
+  drains = 1 + flr((frames - first_drain) / fuel_drain_interval)
+ end
+ return max(0, fuel - drains)
 end
 
 function avg(l)
@@ -1398,7 +1560,9 @@ end
 function pythagoras(r)
  return terrain(
   function(p)
-   return r - sqrt(r^2 - flr(r*p)^2)
+   -- Keep the curve continuous. Quantizing r*p with flr() produced
+   -- visible stair-steps that became harsh at higher cave speeds.
+   return r - sqrt(r^2 - (r*p)^2)
   end
  )
 end
@@ -1520,6 +1684,7 @@ function rock(p_center, width, height, offset_y, shape)
    end),
    terrain(function(p)
     if p >= p_start and p <= p_end then
+
      local rock_p = (p - p_start) / width
      local taper = shape(rock_p)
      return offset_y + half_height * taper
@@ -1543,8 +1708,8 @@ function biome_start()
   if biome_chunk_count == 0 then
    -- return tunnel(0, 110)
    return chunk(
-    static(0) + noise(1), --+ linear(200),
-    static(0 + 96) + noise(1)--+ linear(250)
+    static(0) + noise(5), --+ linear(200),
+    static(0 + 96) + noise(5)--+ linear(250)
    )
   end
  end
@@ -1609,26 +1774,80 @@ function biome_normal()
  end
 end
 
-function next_biome()
+-- Slow terrain policy: angular, noisy, and rock-heavy.
+function next_biome_angular()
  biome_chunk_count = 0
- if boost_engaged_frame == clock_frame then
-  biome_boost()
- elseif coin_combo_length == 1 then
-  biome_zigzag()
- else
-  biome_normal()
+ biome_id = "angular"
+ biome_next_chunk = function()
+  if biome_chunk_count < 1 then
+   local shape = choose({
+    zig(48),
+    zag(48),
+    zigzag(32),
+    zigzag(-32),
+   })
+   local rock_chunk = rock(0.5, 0.1, 20, -16 + rnd(32))
+   return tunnel(0, 96) + shape + rock_chunk
+  end
  end
- -- if biome_id == "start" then
-  -- biome_zigzag()
- -- else
- -- end
- -- elseif biome_id == "zigzag" then
-  -- biome_rooms()
- -- elseif biome_id == "rooms" then
-  -- biome_normal()
- -- else
-  -- biome_rooms()
- -- end
+end
+
+-- Fast terrain policy: Pythagorean bends and broad waves read more clearly
+-- when the cave is moving at two columns per frame.
+function next_biome_flowy()
+ biome_chunk_count = 0
+ biome_id = "flowy"
+ biome_next_chunk = function()
+  if biome_chunk_count < 1 then
+   local shape = choose({
+    nbend(24, 24),
+    sbend(24, 24),
+    ubend(24, 24),
+    zbend(24, 24),
+   })
+   return corridor(0, 104) + shape + sinechunk(4, 0.5)
+  end
+ end
+end
+
+-- Speed 3: larger-radius Pythagorean curves with almost no secondary wave.
+-- The wider corridor keeps those offsets navigable at three columns/frame.
+function next_biome_very_flowy()
+ biome_chunk_count = 0
+ biome_id = "very flowy"
+ biome_next_chunk = function()
+  if biome_chunk_count < 1 then
+   local shape = choose({
+    nbend(32, 32),
+    sbend(32, 32),
+    ubend(32, 32),
+    zbend(32, 32),
+   })
+   return corridor(0, 112) + shape + sinechunk(2, 0.5)
+  end
+ end
+end
+
+function set_cave_vx(v)
+ if cave_vx == v then return end
+ local previous_vx = cave_vx
+ cave_vx = v
+ if cave_vx > previous_vx then speed_up_frame = clock_frame end
+ if cave_vx >= 3 then
+  next_biome = next_biome_very_flowy
+  coin_cooldown_limit = coin_cooldown_fast
+  fuel_drain_interval = fuel_drain_fast
+ elseif cave_vx == 2 then
+  next_biome = next_biome_flowy
+  coin_cooldown_limit = coin_cooldown_fast
+  fuel_drain_interval = fuel_drain_fast
+ else
+  next_biome = next_biome_angular
+  coin_cooldown_limit = coin_cooldown_slow
+  fuel_drain_interval = fuel_drain_slow
+ end
+ -- Begin a chunk from the newly selected policy on the next cave update.
+ biome_policy_dirty = true
 end
 
 function sinewave(magnitude, frequency)
