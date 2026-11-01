@@ -49,6 +49,7 @@ function _init()
  camera_shake_decay = 0.7
  camera_x1 = 0
  camera_y1 = 0
+ boost_engaged_frame = nil
  mode("menu")
 end
 
@@ -99,15 +100,48 @@ function _update60()
   camera_y2 = camera_y1 + 128
  end
 
+ if btn(4) and boost_engaged_frame == nil then
+  boost_engaged_frame = clock_frame
+  cave_vx = 2
+ end
+
+ if boost_engaged_frame then
+  if (clock_frame - boost_engaged_frame) >= 128 then
+   boost_engaged_frame = nil
+   cave_vx = 1
+  else
+   for x = helicopter_x - 4, helicopter_x + 12 do
+    local i = flr(x)
+    if i >= 1 and i <= 128 then
+     local rt = cave_get(cave_rock_top, i)
+     local rb = cave_get(cave_rock_bottom, i)
+     if rt and rb then
+      cave_set(cave_rock_top, i, nil)
+      cave_set(cave_rock_bottom, i, nil)
+      for d = 1, 8 do
+       add(debris, {
+        color = choose({0,0,0,0,0,0,0,0,0,5,6,6,7,11}),
+        x = i,
+        y = rt + rnd(rb - rt),
+        vx = -2 + rnd(4),
+        vy = 0 - rnd(2),
+       })
+      end
+     end
+    end
+   end
+  end
+ end
+
  if update(update_cave) then
   for i = 1,cave_vx do
    cave_head = (cave_head % chunk_length) + 1
 
    chunk_progress += 1
 
-   if chunk_progress < chunk_length then
+   if chunk_progress < chunk_length and boost_engaged_frame != clock_frame then
     chunk_p = chunk_progress / chunk_length
-   elseif chunk_progress == chunk_length then
+   elseif chunk_progress == chunk_length and boost_engaged_frame != clock_frame then
     chunk_p = 1
     dbg("last chunk_progress=" .. chunk_progress)
    else
@@ -712,6 +746,8 @@ function mode(m)
   chunk_length = 128 * cave_vx
   chunk_progress = 0
 
+  boost_engaged_frame = nil
+
   biome_chunk_count = 0
   biome_start()
   chunk_fn = biome_next_chunk()
@@ -762,7 +798,7 @@ function mode(m)
   debug_color = 8
 
   helicopter_x = 48
-  helicopter_y = 120
+  helicopter_y = 32
   helicopter_vy = 2
   helicopter_inclination = "dropping"
   helicopter_gravity = 0.1
@@ -1375,9 +1411,18 @@ function biome_start()
   if biome_chunk_count == 0 then
    -- return tunnel(0, 110)
    return chunk(
-    static(0) + noise(1) + linear(200),
-    static(0 + 160) + noise(1) + linear(250)
+    static(0) + noise(1), --+ linear(200),
+    static(0 + 96) + noise(1)--+ linear(250)
    )
+  end
+ end
+end
+
+function biome_boost()
+ biome_id = "boost"
+ biome_next_chunk = function()
+  if biome_chunk_count == 0 then
+   return tunnel(0, 110)
   end
  end
 end
@@ -1428,7 +1473,9 @@ end
 
 function next_biome()
  biome_chunk_count = 0
- if coin_combo_length == 1 then
+ if boost_engaged_frame == clock_frame then
+  biome_boost()
+ elseif coin_combo_length == 1 then
   biome_zigzag()
  else
   biome_normal()
