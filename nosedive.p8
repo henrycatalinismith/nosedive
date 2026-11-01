@@ -103,6 +103,10 @@ function _update60()
  if btn(4) and boost_engaged_frame == nil then
   boost_engaged_frame = clock_frame
   cave_vx = 2
+  add(booms, {
+   age = 0,
+   life = 24,
+  })
  end
 
  if boost_engaged_frame then
@@ -401,6 +405,13 @@ function _update60()
    end
   end
 
+  for b in all(booms) do
+   b.age += 1
+   if b.age > b.life then
+    del(booms, b)
+   end
+  end
+
  end
 end
 
@@ -594,6 +605,15 @@ end
  if draw(draw_smoke) then
   for i, puff in pairs(smoke) do
    circ(puff.x, puff.y, puff.radius, 5)
+  end
+
+  for b in all(booms) do
+   local p = b.age / b.life
+   local r = p * 16
+   circ(helicopter_x, helicopter_y, r, 7)
+   if r >= 1 then
+    circ(helicopter_x, helicopter_y, r - 1, 8)
+   end
   end
  end
 
@@ -820,6 +840,7 @@ function mode(m)
   helicopter_collision_frame = nil
 
   smoke = {}
+  booms = {}
  elseif m == "dead" then
   update_enable(update_dead)
   update_enable(update_debris)
