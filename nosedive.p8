@@ -53,7 +53,8 @@ function _init()
  camera_y1 = 0
  boost_engaged_frame = nil
  boost_charge_armed = false
- boost_blast_radius = 10
+ boost_disabled_after_rotor = false
+ boost_blast_radius = 8
  boost_debris_per_frame = 3
  tunnel_powerup_duration = 64
  tunnel_powerup_grace = 16
@@ -62,8 +63,11 @@ function _init()
  tunnel_powerup_active = false
  coin_cooldown_slow = 48
  coin_cooldown_fast = 16
+ coin_cooldown_very_fast = 32
  coin_reachable_y = 24
  coin_fuel_gain = 16
+ rock_wall_clearance = 16
+ rock_min_gap = 12
  fuel_drain_slow = 8
  fuel_drain_fast = 4
  fuel_drain_interval = fuel_drain_slow
@@ -71,10 +75,13 @@ function _init()
  fuel_max = 64
  fuel_empty_threshold = 32
  fuel_speed3_threshold = 48
+ fuel_speed4_threshold = 56
  speed_up_flash_duration = 32
  speed_up_frame = nil
  fuel_gained_frame = nil
  fuel_gained_from = 0
+ helicopter_speed_x_offset = 12
+ helicopter_x_follow_speed = 0.25
  death_min_frames = 120
  dead_age = 0
  mode("menu")
@@ -129,9 +136,12 @@ function _update60()
 
  if update(update_fuel) then
   -- Each time a non-full gauge is filled back to max, advance one speed
-  -- tier: 1→2, then 2→3. Starting a run at max does not trigger it.
+  -- tier, up to speed 4. Starting a run at max does not trigger it.
   if fuel < fuel_max then boost_charge_armed = true end
-  if boost_charge_armed and fuel >= fuel_max and cave_vx < 3 then
+  if not boost_disabled_after_rotor
+    and boost_charge_armed
+    and fuel >= fuel_max
+    and cave_vx < 4 then
    boost_engaged_frame = clock_frame
    tunnel_powerup_frame = clock_frame
    tunnel_last_carve_frame = clock_frame
@@ -139,9 +149,10 @@ function _update60()
    set_cave_vx(cave_vx + 1)
   end
 
-  -- Speed 3 falls back to 2 below 48 fuel; speed 2 falls back to 1 when
-  -- the empty-fuel warning becomes eligible.
-  if cave_vx >= 3 and fuel < fuel_speed3_threshold then
+  -- Higher tiers step down at progressively higher fuel reserves.
+  if cave_vx >= 4 and fuel < fuel_speed4_threshold then
+   set_cave_vx(3)
+  elseif cave_vx == 3 and fuel < fuel_speed3_threshold then
    set_cave_vx(2)
   elseif cave_vx == 2 and fuel < fuel_empty_threshold then
    boost_engaged_frame = nil
@@ -240,6 +251,20 @@ function _update60()
  end
 
  if update(update_helicopter) then
+  -- Higher speeds move the helicopter left for more look-ahead. Approach
+  -- the target at a capped rate so speed transitions never cause a jump.
+  local helicopter_target_x = 48 - (cave_vx - 1) * helicopter_speed_x_offset
+  local helicopter_dx = helicopter_target_x - helicopter_x
+  if abs(helicopter_dx) < 0.1 then
+   helicopter_x = helicopter_target_x
+  else
+   helicopter_x += mid(
+    -helicopter_x_follow_speed,
+    helicopter_dx * 0.1,
+    helicopter_x_follow_speed
+   )
+  end
+
   helicopter_vy += helicopter_gravity
   helicopter_vy += rotor_vy
   helicopter_vy = mid(
@@ -455,7 +480,9 @@ function _update60()
     radius = 4 - rnd(2)
    end
    local smoke_color = 5
-   if cave_vx >= 3 then
+   if cave_vx >= 4 then
+    smoke_color = 12
+   elseif cave_vx == 3 then
     smoke_color = 8
    elseif cave_vx == 2 then
     -- Speed-2 exhaust communicates throttle state: large powered puffs
@@ -600,7 +627,7 @@ function _draw()
      -- rock top/bottom blur, derived from same-rock neighbours.
      -- the blur/edge band is only as tall as the *amount* a neighbour
      -- protrudes (its top being lower / bottom being higher), not the
-     -- full distance to that neighbour — otherwise a steep taper paints
+     -- full distance to that neighbour ヌ█⬆️ otherwise a steep taper paints
      -- a tall blue column into the cave.
      local rt_protrude = 0
      local rb_protrude = 0
@@ -644,6 +671,13 @@ function _draw()
   end
  end
 
+ if tunnel_powerup_active and helicopter_x ~= nil then
+  -- Draw the boost effect first so the helicopter remains in front of it.
+  local frame = loop(clock_frame, 8, 8)
+  local sprite = 192 + frame * 2
+  spr(sprite, helicopter_x - 8, helicopter_y - 8, 2, 2)
+ end
+
  if draw(draw_helicopter) or draw(draw_rotor) then
   helicopter_sprite_column = ({
    hovering = 1,
@@ -685,10 +719,6 @@ end
    helicopter_x - 8,
    helicopter_y + tail_y_offset - 4
   )
- end
-
- if tunnel_powerup_active and helicopter_x ~= nil then
-  circ(helicopter_x, helicopter_y, boost_blast_radius, 6)
  end
 
  if draw(draw_hitbox) then
@@ -770,8 +800,10 @@ end
   local fill_color = 6
   if cave_vx == 2 then
    fill_color = 10
-  elseif cave_vx >= 3 then
+  elseif cave_vx == 3 then
    fill_color = 8
+  elseif cave_vx >= 4 then
+   fill_color = 12
   end
 
   local border_outer = 1
@@ -782,9 +814,12 @@ end
    if cave_vx == 2 then
     border_outer = flash and 9 or 10
     border_inner = flash and 10 or 9
-   elseif cave_vx >= 3 then
+   elseif cave_vx == 3 then
     border_outer = flash and 8 or 14
     border_inner = flash and 14 or 8
+   elseif cave_vx >= 4 then
+    border_outer = flash and 12 or 6
+    border_inner = flash and 6 or 12
    end
   end
 
@@ -793,13 +828,15 @@ end
   local incoming_coin = next_incoming_coin()
   local predicted_fuel = incoming_coin and fuel_when_coin_arrives(incoming_coin)
   if boost_charge_armed
-    and cave_vx < 3
+    and cave_vx < 4
     and predicted_fuel ~= nil
     and predicted_fuel + coin_fuel_gain >= fuel_max then
    if cave_vx == 1 then
     border_inner = 10
-   else
+   elseif cave_vx == 2 then
     border_inner = 8
+   else
+    border_inner = 12
    end
   end
 
@@ -811,7 +848,7 @@ end
 
   -- flash the fuel sprite centered when nearly empty
   if fuel < fuel_empty_threshold and (clock_frame % 64 < 32) then
-   sspr(48, 0, 64, 17, 48, 55)
+   sspr(48, 0, 64, 17, 4, 16)
   end
  end
 
@@ -952,6 +989,11 @@ function sort_spans(list)
 end
 
 function add_cave(ci, new_roof, new_floor, rock_samples)
+ -- Speed 1 and 2 need a reliably flyable passage. Recipe noise is allowed
+ -- to vary freely, but it must never collapse the corridor below 72px.
+ if cave_vx ~= nil and cave_vx <= 2 then
+  new_floor = max(new_floor, new_roof + 72)
+ end
  -- walls stored as two plain circular arrays (roof/floor); rocks as spans
  cave_set_roof(ci, new_roof)
  cave_set_floor(ci, new_floor)
@@ -966,6 +1008,7 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
  rock_samples = rock_samples or empty_spans
  local cave_center = (new_roof + new_floor) / 2
  local slots = max(#rock_samples, rock_slot_count)
+ local candidates = {}
 
  for slot = 1, slots do
   local sample = rock_samples[slot]
@@ -980,7 +1023,40 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
     next_rock_id += 1
     rock_chain[slot] = rock
    end
-   add_span(ci, rock, cave_center + rock_top_offset, cave_center + rock_bottom_offset)
+   -- First clip every candidate against the actual noisy walls.
+   local rock_top = max(
+    cave_center + rock_top_offset,
+    new_roof + rock_wall_clearance
+   )
+   local rock_bottom = min(
+    cave_center + rock_bottom_offset,
+    new_floor - rock_wall_clearance
+   )
+   if rock_top < rock_bottom then
+    add(candidates, {rock = rock, top = rock_top, bottom = rock_bottom})
+   end
+  end
+ end
+
+ -- Wall clipping can make originally separate rocks overlap. Resolve the
+ -- final spans together so noise can never turn them into a solid barrier.
+ for i = 2, #candidates do
+  local j = i
+  while j > 1 and candidates[j].top < candidates[j - 1].top do
+   candidates[j], candidates[j - 1] = candidates[j - 1], candidates[j]
+   j -= 1
+  end
+ end
+
+ local previous_bottom = nil
+ for candidate in all(candidates) do
+  local rock_top = candidate.top
+  if previous_bottom ~= nil then
+   rock_top = max(rock_top, previous_bottom + rock_min_gap)
+  end
+  if rock_top < candidate.bottom then
+   add_span(ci, candidate.rock, rock_top, candidate.bottom)
+   previous_bottom = candidate.bottom
   end
  end
  rock_slot_count = #rock_samples
@@ -1035,6 +1111,7 @@ function mode(m)
   dead_age = 0
   boost_engaged_frame = nil
   boost_charge_armed = false
+  boost_disabled_after_rotor = false
   tunnel_powerup_frame = nil
   tunnel_last_carve_frame = nil
   tunnel_powerup_active = false
@@ -1075,6 +1152,12 @@ function mode(m)
    local slice = chunk_fn(x/chunk_length)
    add_cave(x, slice[1], slice[2], slice.rocks)
   end
+
+  -- The initial buffer already contains the complete start chunk. Mark it
+  -- consumed so gameplay immediately starts generating the first real biome
+  -- instead of appending a second full start chunk.
+  chunk_progress = chunk_length
+  chunk_p = 1
 
   cave_y1 = cave_roof_y(chunk_length)
   cave_y2 = cave_floor_y(chunk_length)
@@ -1183,6 +1266,14 @@ function rotor_collision()
 
   rotor_engaged = false
   rotor_vy = 0
+  -- Hitting the ceiling ends the boost tunnel immediately. Clear the
+  -- source timers too, otherwise the next update can restore invincibility.
+  tunnel_powerup_active = false
+  tunnel_powerup_frame = nil
+  tunnel_last_carve_frame = nil
+  boost_engaged_frame = nil
+  boost_charge_armed = false
+  boost_disabled_after_rotor = true
   helicopter_vy = 2
   helicopter_max_vy = 4
   update_disable(update_rotor)
@@ -1695,12 +1786,6 @@ function rock(p_center, width, height, offset_y, shape)
  )
 end
 
--- two rocks sharing the same columns, offset vertically so they stack.
--- stresses the span model's ability to hold multiple rocks per column.
-function stacked_rocks(p_center, width, height, top_offset, gap)
- local bottom_offset = top_offset + height + gap
- return rock(p_center, width, height, top_offset) + rock(p_center, width, height, bottom_offset)
-end
 
 function biome_start()
  biome_id = "start"
@@ -1762,68 +1847,262 @@ function biome_normal()
  biome_id = "normal"
  biome_next_chunk = function()
   if biome_chunk_count < 1 then
-   -- occasionally stack two rocks vertically to exercise the span model
-   local rock_chunk
-   if flrrnd(3) == 0 then
-    rock_chunk = stacked_rocks(0.5, 0.1, 16, -30 + rnd(20), 14)
-   else
-    rock_chunk = rock(0.5, 0.1, 24, -12 + rnd(24))
-   end
+   local rock_chunk = rock(0.5, 0.1, 24, -12 + rnd(24))
    return tunnel(0, 110) + sinechunk(16, 0.5) + rock_chunk
   end
  end
 end
 
--- Slow terrain policy: angular, noisy, and rock-heavy.
+function step_terrain(y)
+ return first_half(static(0)) + second_half(static(y))
+end
+
+function width_change(delta)
+ return chunk(
+  delta * static(-0.5),
+  delta * static(0.5)
+ )
+end
+
+-- Noise that joins cleanly to adjacent chunks. Shared instances can move
+-- roof and floor together; separate instances roughen each wall independently.
+function chunk_noise(n)
+ return terrain(function(p)
+  if p == 0 or p == 1 then return 0 end
+  return flr(rnd(2^n)) - 2^n/2
+ end)
+end
+
+function shared_chunk_noise(n)
+ local last_p = nil
+ local last_y = 0
+ return terrain(function(p)
+  if p ~= last_p then
+   last_p = p
+   if p == 0 or p == 1 then
+    last_y = 0
+   else
+    last_y = flr(rnd(2^n)) - 2^n/2
+   end
+  end
+  return last_y
+ end)
+end
+
+function angular_texture(n)
+ local mode = flrrnd(4)
+ if mode == 0 then
+  local t = shared_chunk_noise(n)
+  return chunk(t, t)
+ elseif mode == 1 then
+  return chunk(chunk_noise(n), chunk_noise(n))
+ elseif mode == 2 then
+  return chunk(chunk_noise(n), static(0))
+ else
+  return chunk(static(0), chunk_noise(n))
+ end
+end
+
+function angular_feature(height)
+ local mode = flrrnd(4)
+ if mode == 0 then return chunk(nil, nil) end
+ if mode < 3 then
+  return rock(0.35 + rnd(0.3), 0.08 + rnd(0.05), 12 + rnd(10), -18 + rnd(36))
+ end
+ return rock(0.5, 0.1, 16, -12 + rnd(24))
+end
+
+function build_angular_chunk()
+ -- Leave room for independent wall noise and width changes while keeping
+ -- the final speed-1 corridor comfortably above the 72px invariant.
+ local height = max(cave_height or 96, 112)
+ local path_amount = choose({12,16,24,32})
+ local path_roll = flrrnd(8)
+ local path = static(0)
+ local flat_step = false
+
+ if path_roll == 2 or path_roll == 3 then
+  path = linear(path_amount)
+ elseif path_roll == 4 or path_roll == 5 then
+  path = linear(-path_amount)
+ elseif path_roll == 6 then
+  path = step_terrain(path_amount)
+  flat_step = true
+ elseif path_roll == 7 then
+  path = step_terrain(-path_amount)
+  flat_step = true
+ end
+
+ local width = static(0)
+ if not flat_step then
+  local width_amount = choose({4,6,8})
+  local width_roll = flrrnd(5)
+  -- Bias back toward a useful passage width before applying random variation.
+  if height < 80 then
+   width = linear(width_amount)
+  elseif height > 108 then
+   width = linear(-width_amount)
+  elseif width_roll == 1 then
+   width = linear(-width_amount)
+  elseif width_roll == 2 then
+   width = linear(width_amount)
+  elseif width_roll == 3 then
+   width = linear(width_amount) % range(0,0.5)
+     + linear(-width_amount) % range(0.5,1)
+  elseif width_roll == 4 then
+   width = linear(-width_amount) % range(0,0.5)
+     + linear(width_amount) % range(0.5,1)
+  end
+ end
+
+ local base = corridor(0, height) + chunk(path, path) + width_change(width)
+ local texture = chunk(static(0), static(0))
+ local feature = chunk(nil, nil)
+ if not flat_step then
+  texture = angular_texture(2 + flrrnd(4))
+  feature = angular_feature(height)
+ end
+ -- A rock straddling an instantaneous step gets displaced with the cave
+ -- center on each side, turning its two halves into an impassable barrier.
+ -- Keep step recipes clean and let the wall transition be the obstacle.
+ return base + texture + feature
+end
+
+-- Speed-1 chunks are procedural recipes rather than named layouts. Path,
+-- width, texture, and features permute independently each time.
 function next_biome_angular()
  biome_chunk_count = 0
  biome_id = "angular"
+ local generated = build_angular_chunk()
  biome_next_chunk = function()
-  if biome_chunk_count < 1 then
-   local shape = choose({
-    zig(48),
-    zag(48),
-    zigzag(32),
-    zigzag(-32),
-   })
-   local rock_chunk = rock(0.5, 0.1, 20, -16 + rnd(32))
-   return tunnel(0, 96) + shape + rock_chunk
-  end
+  if biome_chunk_count < 1 then return generated end
  end
 end
 
--- Fast terrain policy: Pythagorean bends and broad waves read more clearly
--- when the cave is moving at two columns per frame.
+function flowy_texture(min_noise, max_noise)
+ min_noise = min_noise or 2
+ max_noise = max_noise or 5
+ local n = min_noise + flrrnd(max_noise - min_noise + 1)
+ local mode = flrrnd(5)
+ -- Shared noise dominates at speed 2, keeping the passage width calm.
+ if mode < 3 then
+  local t = shared_chunk_noise(n)
+  return chunk(t, t)
+ elseif mode == 3 then
+  return chunk(chunk_noise(n), chunk_noise(n))
+ else
+  return choose({
+   chunk(chunk_noise(n), static(0)),
+   chunk(static(0), chunk_noise(n)),
+  })
+ end
+end
+
+function build_flowy_chunk()
+ -- Speed 2 uses the same 72px minimum as speed 1, with extra recipe room
+ -- so the safety clamp is only a fallback for unusual combinations.
+ local height = max(cave_height or 104, 112)
+ local motion = choose({
+  resize1(0),
+  resize1(12),
+  resize1(-12),
+  zig(16),
+  zag(16),
+  sinechunk(8, 0.5),
+  nbend(20, 20),
+  sbend(20, 20),
+  ubend(20, 20),
+  zbend(20, 20),
+ })
+
+ local width_amount = choose({2,4,6})
+ local width_roll = flrrnd(5)
+ local width = static(0)
+ if height < 88 then
+  width = linear(width_amount)
+ elseif height > 112 then
+  width = linear(-width_amount)
+ elseif width_roll == 1 then
+  width = linear(width_amount)
+ elseif width_roll == 2 then
+  width = linear(-width_amount)
+ elseif width_roll == 3 then
+  width = linear(width_amount) % range(0,0.5)
+    + linear(-width_amount) % range(0.5,1)
+ elseif width_roll == 4 then
+  width = linear(-width_amount) % range(0,0.5)
+    + linear(width_amount) % range(0.5,1)
+ end
+
+ local feature = chunk(nil, nil)
+ if flrrnd(3) == 0 then
+  feature = rock(0.35 + rnd(0.3), 0.08, 10 + rnd(8), -12 + rnd(24))
+ end
+
+ return corridor(0, height)
+   + motion
+   + width_change(width)
+   + flowy_texture()
+   + feature
+end
+
+-- Speed 2 uses procedural recipes too, biased toward curves but retaining
+-- occasional ramps and small zigs from speed 1.
 function next_biome_flowy()
  biome_chunk_count = 0
  biome_id = "flowy"
+ local generated = build_flowy_chunk()
  biome_next_chunk = function()
-  if biome_chunk_count < 1 then
-   local shape = choose({
-    nbend(24, 24),
-    sbend(24, 24),
-    ubend(24, 24),
-    zbend(24, 24),
-   })
-   return corridor(0, 104) + shape + sinechunk(4, 0.5)
-  end
+  if biome_chunk_count < 1 then return generated end
  end
 end
 
--- Speed 3: larger-radius Pythagorean curves with almost no secondary wave.
--- The wider corridor keeps those offsets navigable at three columns/frame.
+-- Speed 3 keeps the Pythagorean character but uses shallow elevation
+-- changes; at three columns/frame larger bends were often unsurvivable.
 function next_biome_very_flowy()
  biome_chunk_count = 0
  biome_id = "very flowy"
  biome_next_chunk = function()
   if biome_chunk_count < 1 then
    local shape = choose({
-    nbend(32, 32),
-    sbend(32, 32),
-    ubend(32, 32),
-    zbend(32, 32),
+    nbend(12, 12),
+    sbend(12, 12),
+    ubend(12, 12),
+    zbend(12, 12),
    })
-   return corridor(0, 112) + shape + sinechunk(2, 0.5)
+   -- Occasionally carry the whole corridor gently uphill or downhill for
+   -- the length of the chunk, without changing its usable height.
+   local drift = choose({static(0), linear(6), linear(-6)})
+   return corridor(0, 64)
+     + drift
+     + shape
+     + sinechunk(2, 0.5)
+     + flowy_texture(1, 3)
+  end
+ end
+end
+
+-- Speed 4 trades roughness and sharp elevation changes for broad curves.
+-- Its slightly wider corridor preserves reaction room at four columns/frame.
+function next_biome_ultra_flowy()
+ biome_chunk_count = 0
+ biome_id = "ultra flowy"
+ biome_next_chunk = function()
+  if biome_chunk_count < 1 then
+   local shape = choose({
+    nbend(8, 8),
+    sbend(8, 8),
+    ubend(8, 8),
+    zbend(8, 8),
+   })
+   -- Keep the ultra-flowy mode calm, but give it occasional long climbs
+   -- and descents so it does not feel visually frozen.
+   local drift = choose({static(0), linear(5), linear(-5)})
+   return corridor(0, 72)
+     + drift
+     + shape
+     + sinechunk(4, 0.5)
+     + flowy_texture(1, 2)
   end
  end
 end
@@ -1833,9 +2112,13 @@ function set_cave_vx(v)
  local previous_vx = cave_vx
  cave_vx = v
  if cave_vx > previous_vx then speed_up_frame = clock_frame end
- if cave_vx >= 3 then
+ if cave_vx >= 4 then
+  next_biome = next_biome_ultra_flowy
+  coin_cooldown_limit = coin_cooldown_very_fast
+  fuel_drain_interval = fuel_drain_fast
+ elseif cave_vx == 3 then
   next_biome = next_biome_very_flowy
-  coin_cooldown_limit = coin_cooldown_fast
+  coin_cooldown_limit = coin_cooldown_very_fast
   fuel_drain_interval = fuel_drain_fast
  elseif cave_vx == 2 then
   next_biome = next_biome_flowy
@@ -1907,6 +2190,9 @@ end
 
 -- circular-buffer index for the span arrays
 function cave_index(i)
+ -- Screen positions such as the smoothly moving helicopter can be
+ -- fractional; cave storage is indexed by integer pixel columns.
+ i = flr(i)
  return ((cave_head + i - 2) % chunk_length) + 1
 end
 
@@ -1986,7 +2272,7 @@ __gfx__
 66666666666666556660006666600000666000006666000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000666655000666660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 05055000005055000005055000005050000005000000005000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00999900009999000099990000999905009999050099990000000000000000000000000000000000009999000099990000999900009999000099990000999900
+00999900009999000099990000999905009999050099990000999900009999000099990000999900009999000099990000999900009999000099990000999900
 09aaaa9009aaaa9009aaaa9009aaaa9009aaaa9509aaaa9509aaaa9009aaaa9509aaaa9009aaaa9009aaaa9009aaaa9009aaaa9009aaaa9009aaaa9009aaaa90
 09a99a9009a99a9009a99a9009a99a9009a99a9009a99a9509a99a9509a99a9009a99a9509a99a9009a99a9009a99a9009a99a9009a99a9009a99a9009a99a90
 09a9aa9009a9aa9009a9aa9009a9aa9009a9aa9009a9aa9009a9aa9509a9aa9509a9aa9009a9aa9509a9aa9009a9aa9009a9aa9009a9aa9009a9aa9009a9aa90
@@ -2030,6 +2316,41 @@ __gfx__
 00000000000000000000000000000000000077700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000077000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000070000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000007000000000000000070000000000000000700000000000000007000000000000000070000000000000000070000
+0000000088800000000700000990000000000a0000a0000000000bb00000000000000ccc0000000000000dddd000000000000eeeee0000000000004444400000
+007000000008070000009000000900000000a700000a00000000b070000b00000000c007000000000000d0007000000000000000070000000000000000700000
+00080000000080000009700000079000000a00000000a000000b00000000b000000c00000000c000000000000000000000000000000000000000000000000000
+0080700000070000009000000000097000a0000000000a0000b0000000000b000000000000000c000000000000000d0000000000000000007000000000000000
+080000000000000009000000000000000a000000000007a700000000000000b000000000000000c000000000000000d000000000000000e00470000000000000
+08000000000000000900000000000000000000000000000000000000000007b700000000000000c000000000000000d07e700000000000e00400000000000040
+080000000000000000000000000000000000000000000000000000000000000000000000000007c77d700000000000d00e000000000000e00400000000000040
+00000000000000800000000000000000000000000000000000000000000000007c700000000000c00d000000000007d70e000000000000e00400000000000040
+0000000000000080000000000000009000000000000000007b700000000000000c000000000000000d000000000000000e000000000007e70400000000000040
+000000000000008000000000000000907a700000000000a00b000000000000000c000000000000000d000000000000000e000000000000000000000000000740
+0000700000070800079000000000090000a0000000000a0000b0000000000b0000c000000000000000d000000000000000000000000000000000000000000007
+00080000000080000009700000079000000a00000000a000000b00000000b000000c00000000c000000000000000000000000000000000000000000000000000
+007080000000070000009000000900000000a000007a00000000b000070b000000000000700c000000000007000d000000000070000000000000070000000000
+0000088800000000000009900000700000000a0000a00000000000000bb0000000000000ccc000000000000dddd00000000000eeeee000000000044444000000
+00000000000000000000000000000000000000000070000000000000070000000000000070000000000000070000000000000070000000000000700000000000
 __map__
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
