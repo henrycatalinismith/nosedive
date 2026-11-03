@@ -1915,8 +1915,8 @@ function biome_start()
   if biome_chunk_count == 0 then
    -- return tunnel(0, 110)
    return chunk(
-    static(0) + noise(5), --+ linear(200),
-    static(0 + 96) + noise(5)--+ linear(250)
+    static(0) + noise(3), --+ linear(200),
+    static(0 + 96) + noise(3)--+ linear(250)
    )
   end
  end
