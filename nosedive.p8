@@ -2,15 +2,14 @@ pico-8 cartridge // http://www.pico-8.com
 version 43
 __lua__
 function _init()
+ poke(0x5f80, 1)
  cartdata("nosedive")
  high_score = dget(0)
- -- high_score = nil
  if high_score == nil then
   high_score = 0
   dset(0, 0)
  end
  new_record = false
-
  update_mode = 0
  update_camera = 1
  update_cave = 2
@@ -23,7 +22,6 @@ function _init()
  update_menu = 256
  update_dead = 512
  update_fuel = 1024
-
  update_enable(update_camera)
  update_enable(update_cave)
  update_enable(update_helicopter)
@@ -32,29 +30,22 @@ function _init()
  update_enable(update_coins)
  update_enable(update_debris)
  update_enable(update_smoke)
-
  draw_mode = 0
  draw_cave = 1
  draw_helicopter = 2
  draw_rotor = 4
- draw_hitbox = 8
  draw_debris = 16
  draw_coins = 32
- draw_debug = 64
  draw_smoke = 128
  draw_menu = 256
  draw_dead = 512
  draw_fuel = 1024
-
  draw_enable(draw_cave)
  draw_enable(draw_helicopter)
  draw_enable(draw_rotor)
- -- draw_enable(draw_hitbox)
  draw_enable(draw_coins)
  draw_enable(draw_debris)
- draw_enable(draw_debug)
  draw_enable(draw_smoke)
-
  clock_frame = 0
  score = 0
  score_display = 0
@@ -103,27 +94,19 @@ function _init()
  dead_age = 0
  mode("menu")
 end
-
 function _update60()
  clock_frame += 1
-
- -- Animate the HUD score toward its real value without jumping.
  if score_display < score then
   score_display += max(1, flr((score - score_display + 7) / 8))
  end
-
  if update(update_fuel) and clock_frame % fuel_drain_interval == 0 then
   fuel = max(0, fuel - 1)
  end
-
  if update(update_menu) then
   if btnp() > 0 then
    mode("play")
   end
  end
-
- -- Drive the lockout from the visible death state itself, so if the death
- -- screen is drawn its timer is guaranteed to advance.
  if draw(draw_dead) then
   dead_age += 1
   if dead_age == 128 then
@@ -133,14 +116,9 @@ function _update60()
    mode("menu")
   end
  end
-
  if update(update_camera) then
-  -- Don't chase the cave center: angular terrain made that oscillation
-  -- nauseating. Keep the camera still inside a generous player dead zone,
-  -- then follow gently only as the helicopter approaches a screen edge.
   local screen_y = helicopter_y - camera_y1
   camera_ideal_y1 = camera_y1
-
   if rotor_collision_frame then
    camera_ideal_y1 = helicopter_y - 64
   elseif screen_y < 44 then
@@ -148,19 +126,12 @@ function _update60()
   elseif screen_y > 84 then
    camera_ideal_y1 = helicopter_y - 84
   end
-
   camera_offset_y1 = camera_ideal_y1 - camera_y1
-  -- Fast enough to catch the helicopter at terminal velocity, while the
-  -- proportional response keeps small corrections from snapping.
   camera_vy = mid(-3, camera_offset_y1 * 0.25, 3)
-
   camera_y1 += camera_vy
   camera_y2 = camera_y1 + 128
  end
-
  if update(update_fuel) then
-  -- Each time a non-full gauge is filled back to max, advance one speed
-  -- tier, up to speed 4. Starting a run at max does not trigger it.
   if fuel < fuel_max then boost_charge_armed = true end
   if not boost_disabled_after_rotor
     and boost_charge_armed
@@ -172,8 +143,6 @@ function _update60()
    boost_charge_armed = false
    set_cave_vx(cave_vx + 1)
   end
-
-  -- Higher tiers step down at progressively higher fuel reserves.
   if cave_vx >= 4 and fuel < fuel_speed4_threshold then
    set_cave_vx(3)
   elseif cave_vx == 3 and fuel < fuel_speed3_threshold then
@@ -183,7 +152,6 @@ function _update60()
    set_cave_vx(1)
   end
  end
-
  tunnel_powerup_active = false
  local tunneling = false
  if tunnel_powerup_frame ~= nil then
@@ -198,19 +166,16 @@ function _update60()
    tunnel_last_carve_frame = nil
   end
  end
-
  if tunnel_powerup_active and not previous_tunnel_powerup_active then
   sfx(39, 2)
  elseif not tunnel_powerup_active and previous_tunnel_powerup_active then
   sfx(-1, 2)
  end
  previous_tunnel_powerup_active = tunnel_powerup_active
-
  if tunnel_powerup_active
    and helicopter_x ~= nil
    and cave_spans_arr ~= nil
    and boost_engaged_frame ~= nil then
-  -- Briefly protect the player while a newly selected speed biome arrives.
   local carved = carve_terrain(
    helicopter_x + 4,
    helicopter_y,
@@ -222,7 +187,6 @@ function _update60()
    tunneling = true
   end
  end
-
  if tunneling
    and (not previous_tunneling or clock_frame % tunnel_sfx_interval == 0) then
   sfx(36, 1)
@@ -230,27 +194,20 @@ function _update60()
   sfx(-1, 1)
  end
  previous_tunneling = tunneling
-
  if update(update_cave) then
   for i = 1,cave_vx do
    cave_head = (cave_head % chunk_length) + 1
-
    chunk_progress += 1
    local force_new_chunk = biome_policy_dirty
      or boost_engaged_frame == clock_frame and i == 1
-
    if chunk_progress < chunk_length and not force_new_chunk then
     chunk_p = chunk_progress / chunk_length
    elseif chunk_progress == chunk_length and not force_new_chunk then
     chunk_p = 1
-    dbg("last chunk_progress=" .. chunk_progress)
    else
-    dbg("nxtchunk " .. chunk_progress .. ", " .. cave_y2 - cave_y1)
-
     chunk_progress = 0
     chunk_p = 0
     chunk_y1 = cave_y1
-
     if biome_policy_dirty then
      next_biome()
      chunk_fn = biome_next_chunk()
@@ -263,12 +220,8 @@ function _update60()
      end
     end
     biome_chunk_count += 1
-
-    dbg(chunk_y1)
    end
-
    next_slice = chunk_fn(chunk_p)
-
    add_cave(
     chunk_length,
     chunk_y1 + next_slice[1],
@@ -283,10 +236,8 @@ function _update60()
    ) / 2) - 4
   end
  end
-
  if update(update_rotor) then
   rotor_engaged = btn(5) and fuel > 0
-  -- While tunneling outside the corridor, steer the throttle back toward it.
   if tunnel_powerup_active then
    local steer = tunnel_steer()
    if steer == "up" then
@@ -308,10 +259,7 @@ function _update60()
    rotor_vy = 0
   end
  end
-
  if update(update_helicopter) then
-  -- Higher speeds move the helicopter left for more look-ahead. Approach
-  -- the target at a capped rate so speed transitions never cause a jump.
   local helicopter_target_x = 48 - (cave_vx - 1) * helicopter_speed_x_offset
   local helicopter_dx = helicopter_target_x - helicopter_x
   if abs(helicopter_dx) < 0.1 then
@@ -323,7 +271,6 @@ function _update60()
     helicopter_x_follow_speed
    )
   end
-
   helicopter_vy += helicopter_gravity
   helicopter_vy += rotor_vy
   helicopter_vy = mid(
@@ -332,7 +279,6 @@ function _update60()
    helicopter_max_vy
   )
   helicopter_y += helicopter_vy
-
   if helicopter_vy > 0 and not rotor_engaged then
    helicopter_inclination = "dropping"
   elseif helicopter_vy < 0 and rotor_engaged then
@@ -340,15 +286,12 @@ function _update60()
   else
    helicopter_inclination = "hovering"
   end
-
  end
-
  if update(update_hitbox) then
   hitbox_x1 = helicopter_x - 4
   hitbox_y1 = helicopter_y - 4
   hitbox_x2 = hitbox_x1 + 8
   hitbox_y2 = hitbox_y1 + 6
-
   for x = hitbox_x1,hitbox_x2 do
    local i = flr(x)
    if not tunnel_powerup_active then
@@ -375,16 +318,13 @@ function _update60()
      end
     end
    end
-
    for coin in all(coins) do
     if coin.x1 > hitbox_x2 then
-     -- coin ahead
     elseif coin.x2 > hitbox_x1 then
      if coin.hit == nil
       and (coin.x1 < x and coin.x2 > x)
       and not (coin.y2 < hitbox_y1 or coin.y1 > hitbox_y2)
       then
-      -- cave_vx += 1
       coin.hit = clock_frame
       score += score_multiplier[cave_vx]
       score_changed_frame = clock_frame
@@ -394,7 +334,6 @@ function _update60()
       fuel_gained_frame = clock_frame
       camera_shake_intensity = 5
       camera_shake_decay = 0.6
-
       for i = 1,64 do
        add(debris, {
         color = choose({9,10}),
@@ -406,17 +345,13 @@ function _update60()
        })
       end
      end
-
     elseif coin.hit == nil and coin.miss == nil then
      coin.miss = clock_frame
     end
-
    end
-
   end
   ::boom::
  end
-
  if update(update_debris) then
   for d in all(debris) do
    d.x -= cave_vx
@@ -426,37 +361,28 @@ function _update60()
     goto continue_debris
    end
    if d.vx == 0 and d.vy == 0 then goto continue_debris end
-
    d.vy += 0.1
    d.vy = mid(-4, d.vy, 4)
-
    if is_space(d.x + d.vx, d.y) then
     d.x += d.vx
    else
     d.vx *= rnd(0.3) * -1 * d.vx
     d.vy = 0
    end
-
    local i = flr(d.x)
    if i > 128 or i < 1 then
-    -- ignore out of screen debris
    elseif d.y + flr(d.vy) < cave_roof_y(i) then
-    -- debris hits roof
     d.vy *= rnd(0.5) * - 1
     d.vx = rnd(0.2)
    elseif d.y + flr(d.vy) > cave_floor_y(i) then
-    -- debris hits floor
     d.vy *= rnd(0.3) * - 1
     d.vx = rnd(0.2)
    else
-    -- debris can move
     d.y += d.vy
    end
-
    ::continue_debris::
   end
  end
-
  if update(update_coins) then
   for coin in all(coins) do
    coin.x1 -= cave_vx
@@ -466,25 +392,19 @@ function _update60()
     del(coins, coin)
    end
   end
-
   if (#coins == 0 or coins[#coins].x2 < 120) and biome_id != "start" then
    if coin_cooldown_frame <= coin_cooldown_limit then
     coin_cooldown_frame += 1
    else
     coin_cooldown_frame = 0
-    -- Spawn fully beyond the visible 0..127 screen, attached to the
-    -- rightmost cave column so terrain and coin scroll in together.
     local x1 = 128
     local cx1 = 128
-
     local top = nil   -- will be filled: y of the boundary above the coin gap
     local btm = nil   -- y of the boundary below the coin gap
-
     local rock_span = nil
     for span in all(cave_spans(cx1)) do
      if span.rock ~= nil then rock_span = span end
     end
-
     if rock_span then
      top_gap = abs(cave_roof_y(cx1) - rock_span.top)
      btm_gap = abs(cave_floor_y(cx1) - rock_span.bottom)
@@ -499,11 +419,9 @@ function _update60()
      top = cave_roof_y(cx1)
      btm = cave_floor_y(cx1)
     end
-
     local y1 = top + ((btm - top) / 2) - 4
     local valid_y1 = top + 1
     local valid_y2 = btm - 10
-
     if valid_y1 <= valid_y2 then
      y1 = mid(valid_y1, y1, valid_y2)
      if last_coin_y1 ~= nil then
@@ -516,7 +434,6 @@ function _update60()
       end
      end
     end
-
     last_coin_y1 = y1
     local x2 = x1+9
     local y2 = y1+9
@@ -529,7 +446,6 @@ function _update60()
    end
   end
  end
-
  if update(update_smoke) then
   if fuel > 0 and helicopter_collision_frame == nil and clock_frame % 4 == 0 then
    local radius = 1
@@ -544,8 +460,6 @@ function _update60()
    elseif cave_vx == 3 then
     smoke_color = 8
    elseif cave_vx == 2 then
-    -- Speed-2 exhaust communicates throttle state: large powered puffs
-    -- are yellow; the smaller unpowered trail is orange.
     if rotor_engaged then
      smoke_color = 10
     else
@@ -562,7 +476,6 @@ function _update60()
     age = 0,
    })
   end
-
   for i, puff in pairs(smoke) do
    puff.x -= cave_vx
    puff.x += puff.vx / 16
@@ -575,17 +488,14 @@ function _update60()
     del(smoke, puff)
    end
   end
-
   for b in all(booms) do
    b.age += 1
    if b.age > b.life then
     del(booms, b)
    end
   end
-
  end
 end
-
 function _draw()
  local camera_shake_x = rnd(camera_shake_intensity) - camera_shake_intensity/2
  local camera_shake_y = rnd(camera_shake_intensity) - camera_shake_intensity/2
@@ -594,24 +504,18 @@ function _draw()
  if camera_shake_intensity < 0.1 then
   camera_shake_intensity = 0
  end
-
  cls(0)
-
  if draw(draw_menu) then
   camera(0, 0)
-
   sspr(0, 64, 64, 12, 30, 48)
-
   if loop(clock_frame, 117, 2) == 0 then
    print("tap to start", 39, 64, 6)
   end
-
   if high_score then
    local hs_text = ""..high_score
    print(hs_text, 64 - #hs_text * 2, 80, 6)
   end
  end
-
  if draw(draw_coins) then
   for coin in all(coins) do
    local x = coin.x1+1
@@ -624,24 +528,15 @@ function _draw()
    end
   end
  end
-
  if draw(draw_cave) then
-
   local bright = 7
   local dim = 1
-
   for i = 1,128 do
    local x = i
    local roof = cave_roof_y(i)
    local floor = cave_floor_y(i)
-
-   -- wall fill
    line(x, camera_y1, x, roof, 5)
    line(x, floor, x, camera_y2, 5)
-
-   -- roof/floor blur + edge, derived from neighbours on the fly.
-   -- band height = how much a neighbour protrudes into the cave, not
-   -- the neighbour's full position (avoids tall blue zones on cliffs).
    local roof_protrude = 0
    local floor_protrude = 0
    for d = -2, 2 do
@@ -652,8 +547,6 @@ function _draw()
      if nf - floor > floor_protrude then floor_protrude = nf - floor end
     end
    end
-
-   -- roof: short blur band + crisp edge where a neighbour dips
    roof_protrude = min(roof_protrude, 3)
    if roof_protrude > 0 then
     line(x, roof - roof_protrude, x, roof, 1)
@@ -666,8 +559,6 @@ function _draw()
    if roof_protrude > 0 then
     line(x, roof - roof_protrude, x, roof - roof_protrude, roof_edge_col)
    end
-
-   -- floor: short blur band + crisp edge where a neighbour rises
    floor_protrude = min(floor_protrude, 3)
    if floor_protrude > 0 then
     line(x, floor, x, floor + floor_protrude, 1)
@@ -680,19 +571,11 @@ function _draw()
    if floor_protrude > 0 then
     line(x, floor + floor_protrude, x, floor + floor_protrude, floor_edge_col)
    end
-
-   -- rocks: every span with an identity, drawn independently
    for span in all(cave_spans(i)) do
     if span.rock ~= nil then
      local rock_top = span.top
      local rock_bottom = span.bottom
      line(x, rock_top, x, rock_bottom, 5)
-
-     -- rock top/bottom blur, derived from same-rock neighbours.
-     -- the blur/edge band is only as tall as the *amount* a neighbour
-     -- protrudes (its top being lower / bottom being higher), not the
-     -- full distance to that neighbour ヌ█⬆️ otherwise a steep taper paints
-     -- a tall blue column into the cave.
      local rt_protrude = 0
      local rb_protrude = 0
      for d = -2, 2 do
@@ -705,9 +588,6 @@ function _draw()
        end
       end
      end
-
-     -- short blur band above the rock top / below the rock bottom.
-     -- capped so a steep rock taper doesn't paint a tall solid band.
      rt_protrude = min(rt_protrude, 3)
      rb_protrude = min(rb_protrude, 3)
      if rt_protrude > 0 then
@@ -716,14 +596,12 @@ function _draw()
      if rb_protrude > 0 then
       line(x, rock_bottom, x, rock_bottom + rb_protrude, 1)
      end
-
      if helicopter_x < i and helicopter_collision_frame == nil then
       local rt_edge_col = 1
       if helicopter_y - rock_top - i/2 < 8 then rt_edge_col = 7 end
       if rt_protrude > 0 then
        line(x, rock_top - rt_protrude, x, rock_top - rt_protrude, rt_edge_col)
       end
-
       local rb_edge_col = 1
       if rock_bottom - helicopter_y - i/2 < 8 then rb_edge_col = 7 end
       if rb_protrude > 0 then
@@ -734,14 +612,11 @@ function _draw()
    end
   end
  end
-
  if tunnel_powerup_active and helicopter_x ~= nil then
-  -- Draw the boost effect first so the helicopter remains in front of it.
   local frame = loop(clock_frame, 8, 8)
   local sprite = 192 + frame * 2
   spr(sprite, helicopter_x - 8, helicopter_y - 8, 2, 2)
  end
-
  if draw(draw_helicopter) or draw(draw_rotor) then
   helicopter_sprite_column = ({
    hovering = 1,
@@ -755,7 +630,6 @@ function _draw()
    climbing = 3,
   })[helicopter_inclination]
 end
-
  if draw(draw_helicopter) then
   sspr(
    helicopter_sprite_x,
@@ -766,7 +640,6 @@ end
    helicopter_y - 4
   )
  end
-
  if draw(draw_rotor) then
   sspr(
    helicopter_sprite_x + 3,
@@ -784,43 +657,6 @@ end
    helicopter_y + tail_y_offset - 4
   )
  end
-
- if draw(draw_hitbox) then
-  rect(
-   hitbox_x1,
-   hitbox_y1,
-   hitbox_x2,
-   hitbox_y2,
-   11
-  )
-
-  for x = hitbox_x1,hitbox_x2 do
-   local i = x
-   pset(x, cave_floor_y(i), 11)
-   pset(x, cave_roof_y(i), 11)
-   for span in all(cave_spans(i)) do
-    if span.rock ~= nil then
-     pset(x, span.top, 11)
-     pset(x, span.bottom, 11)
-    end
-   end
-  end
-
-  for coin in all(coins) do
-   local coin_color = 11
-   if coin.miss ~= nil then
-    coin_color = 8
-   end
-   rect(
-    coin.x1,
-    coin.y1,
-    coin.x2,
-    coin.y2,
-    coin_color
-   )
-  end
- end
-
  if draw(draw_debris) then
   for f in all(debris) do
    pset(
@@ -830,17 +666,12 @@ end
    )
   end
  end
-
  if draw(draw_smoke) then
   for i, puff in pairs(smoke) do
    circ(puff.x, puff.y, puff.radius, puff.color)
   end
-
-
  end
-
  camera(0, 0)
-
  if draw(draw_fuel) then
   local fuel_disp = fuel
   if fuel_gained_frame ~= nil then
@@ -852,15 +683,11 @@ end
     fuel_disp = fuel_gained_from + (fuel - fuel_gained_from) * t
    end
   end
-
   local fuel_ratio = fuel_disp / fuel_max
-
-  -- bar: 48px wide, 8px tall, top-left corner
   local bar_x = 4
   local bar_y = 4
   local bar_w = 32
   local bar_h = 8
-
   local fill_color = 6
   if cave_vx == 2 then
    fill_color = 10
@@ -869,7 +696,6 @@ end
   elseif cave_vx >= 4 then
    fill_color = 12
   end
-
   local border_outer = 1
   local border_inner = 6
   if speed_up_frame ~= nil
@@ -886,9 +712,6 @@ end
     border_inner = flash and 6 or 12
    end
   end
-
-  -- Preview the next tier only if the nearest incoming coin can still fill
-  -- the gauge after accounting for fuel burned before it arrives.
   local incoming_coin = next_incoming_coin()
   local predicted_fuel = incoming_coin and fuel_when_coin_arrives(incoming_coin)
   if boost_charge_armed
@@ -903,18 +726,13 @@ end
     border_inner = 12
    end
   end
-
-  -- two nested borders make the gauge readable against every cave color
   rect(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + bar_h + 2, border_outer)
   rect(bar_x - 1, bar_y - 1, bar_x + bar_w + 1, bar_y + bar_h + 1, border_inner)
   rectfill(bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 0)
   rectfill(bar_x, bar_y, bar_x + bar_w * fuel_ratio, bar_y + bar_h, fill_color)
-
-  -- flash the fuel sprite centered when nearly empty
   if fuel < fuel_empty_threshold and (clock_frame % 64 < 32) then
    sspr(48, 0, 64, 17, 4, 16)
   end
-
   local score_text = tostring(score_display)
   local border = 7
   if score_changed_frame ~= nil and clock_frame - score_changed_frame < 16 then
@@ -922,16 +740,6 @@ end
   end
   printr(score_text, 124 - #score_text * 4, 4, {border,1,11})
 end
-
-if draw(draw_debug) then
-  for i,debug_message in pairs(debug_messages) do
-   print(debug_message[1], 0, ((i-1)*8)+96, debug_message[2])
-  end
-  draw_bar("cpu", stat(1), 1, 123)
-  -- print(cave_y1, 32, 1, 7)
-  print(biome_id, 1, 1, 7)
- end
-
  if draw(draw_dead) then
   printr("dead", 64 - 4 * 2, 40, {7,1,11})
   if dead_age >= 60 then
@@ -954,10 +762,6 @@ if draw(draw_debug) then
   end
  end
 end
-
--- Direction the throttle must take to return the helicopter to open cave
--- while tunneling: "down" when stuck up in a preserved roof mass, "up" when
--- stuck down in a preserved floor mass, nil when back in ordinary space.
 function tunnel_steer()
  if helicopter_x == nil or cave_spans_arr == nil then return nil end
  for x = flr(helicopter_x - 4), flr(helicopter_x + 4) do
@@ -974,21 +778,14 @@ function tunnel_steer()
  end
  return nil
 end
-
--- True while a preserved wall mass separates the helicopter from the main
--- cave. After the normal shield timer, this keeps tunneling active until the
--- helicopter has actually returned to ordinary cave space.
 function helicopter_in_isolated_tunnel()
  return tunnel_steer() ~= nil
 end
-
--- subtract a circular blast from every kind of solid terrain
 function carve_terrain(cx, cy, radius, debris_budget)
  debris_budget = debris_budget or 0
  local carved = false
  local x1 = max(1, flr(cx - radius))
  local x2 = min(128, flr(cx + radius))
-
  for x = x1, x2 do
   local dx = x - cx
   local dy = sqrt(max(0, radius^2 - dx^2))
@@ -996,10 +793,6 @@ function carve_terrain(cx, cy, radius, debris_budget)
   local blast_bottom = cy + dy
   local roof = cave_roof_y(x)
   local floor = cave_floor_y(x)
-
-  -- If the blast is wholly beyond a wall, preserve the solid mass between
-  -- the old cave and the new tunnel as an internal span. The outer edge of
-  -- the blast becomes the new roof/floor heightfield.
   if blast_top < roof then
    carved = true
    if blast_bottom < roof then
@@ -1020,8 +813,6 @@ function carve_terrain(cx, cy, radius, debris_budget)
    end
    cave_set_floor(x, blast_bottom)
   end
-
-  -- Internal spans can be shortened, removed, or split in two.
   local list = cave_spans_arr[cave_index(x)]
   if list ~= nil then
    for i = #list, 1, -1 do
@@ -1033,7 +824,6 @@ function carve_terrain(cx, cy, radius, debris_budget)
      local cut_top = max(old_top, blast_top)
      local cut_bottom = min(old_bottom, blast_bottom)
      debris_budget = carve_debris(x, cut_top, cut_bottom, debris_budget)
-
      if blast_top <= old_top and blast_bottom >= old_bottom then
       deli(list, i)
      elseif blast_top <= old_top then
@@ -1055,7 +845,6 @@ function carve_terrain(cx, cy, radius, debris_budget)
  end
  return carved
 end
-
 function carve_debris(x, y1, y2, budget)
  if budget <= 0 or y2 <= y1 then return budget end
  add(debris, {
@@ -1068,7 +857,6 @@ function carve_debris(x, y1, y2, budget)
  })
  return budget - 1
 end
-
 function sort_spans(list)
  for i = 2, #list do
   local j = i
@@ -1078,29 +866,17 @@ function sort_spans(list)
   end
  end
 end
-
 function add_cave(ci, new_roof, new_floor, rock_samples)
- -- Speed 1 and 2 need a reliably flyable passage. Recipe noise is allowed
- -- to vary freely, but it must never collapse the corridor below 72px.
  if cave_vx ~= nil and cave_vx <= 2 then
   new_floor = max(new_floor, new_roof + 72)
  end
- -- walls stored as two plain circular arrays (roof/floor); rocks as spans
  cave_set_roof(ci, new_roof)
  cave_set_floor(ci, new_floor)
-
- -- this column is being (re)written for the incoming chunk, so discard
- -- any spans a previous chunk left in this circular-buffer slot. Without
- -- this, wrapping slots accumulate stale rock spans over time.
  cave_spans_arr[cave_index(ci)] = nil
-
- -- rock_samples is a stable list of {top_offset,bottom_offset} pairs.
- -- Keeping absent rocks as empty pairs preserves each stacked rock's slot.
  rock_samples = rock_samples or empty_spans
  local cave_center = (new_roof + new_floor) / 2
  local slots = max(#rock_samples, rock_slot_count)
  local candidates = {}
-
  for slot = 1, slots do
   local sample = rock_samples[slot]
   local rock_top_offset = sample and sample[1]
@@ -1114,7 +890,6 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
     next_rock_id += 1
     rock_chain[slot] = rock
    end
-   -- First clip every candidate against the actual noisy walls.
    local rock_top = max(
     cave_center + rock_top_offset,
     new_roof + rock_wall_clearance
@@ -1128,9 +903,6 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
    end
   end
  end
-
- -- Wall clipping can make originally separate rocks overlap. Resolve the
- -- final spans together so noise can never turn them into a solid barrier.
  for i = 2, #candidates do
   local j = i
   while j > 1 and candidates[j].top < candidates[j - 1].top do
@@ -1138,7 +910,6 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
    j -= 1
   end
  end
-
  local previous_bottom = nil
  for candidate in all(candidates) do
   local rock_top = candidate.top
@@ -1152,11 +923,9 @@ function add_cave(ci, new_roof, new_floor, rock_samples)
  end
  rock_slot_count = #rock_samples
 end
-
 function mode(m)
  update_disable(update_mode)
  draw_disable(draw_mode)
-
  if m == "menu" then
   music(0)
   update_enable(update_menu)
@@ -1172,17 +941,13 @@ function mode(m)
   update_enable(update_debris)
   update_enable(update_smoke)
   update_enable(update_fuel)
-
   draw_enable(draw_cave)
   draw_enable(draw_helicopter)
   draw_enable(draw_rotor)
   draw_enable(draw_coins)
   draw_enable(draw_debris)
-  -- draw_enable(draw_debug)
   draw_enable(draw_smoke)
-  --draw_enable(draw_hitbox)
   draw_enable(draw_fuel)
-
   camera_x1 = 0
   camera_y1 = 0
   camera_y2 = camera_y1 + 128
@@ -1193,11 +958,9 @@ function mode(m)
   camera_vy = 0
   camera_ideal_y1 = camera_y1
   camera_offset_y1 = 0
-
   chunk_p = 0
   chunk_length = 128 * cave_vx
   chunk_progress = 0
-
   dead_age = 0
   boost_engaged_frame = nil
   boost_charge_armed = false
@@ -1212,59 +975,41 @@ function mode(m)
   fuel_gained_frame = nil
   fuel_gained_from = 0
   speed_up_frame = nil
-
   biome_chunk_count = 0
   biome_start()
   chunk_fn = biome_next_chunk()
   biome_chunk_count += 1
-
   local start_slice = chunk_fn(0)
   local start_roof = start_slice[1]
   local start_floor = start_slice[2]
-
-  -- span-based terrain: walls + rocks as per-column span lists
   cave_roof_arr = fill(chunk_length, start_roof)
   cave_floor_arr = fill(chunk_length, start_floor)
   cave_spans_arr = {}
   next_rock_id = 1
-  -- Wall masses isolated by tunneling become ordinary internal spans.
   tunnel_roof_rock = {id = next_rock_id}
   next_rock_id += 1
   tunnel_floor_rock = {id = next_rock_id}
   next_rock_id += 1
   rock_chain = {}
   rock_slot_count = 0
-
   cave_head = 1
-
   coin_height = 64
   coin_cooldown_frame = clock_frame
   coin_cooldown_limit = coin_cooldown_slow
-
   for x = 1,chunk_length do
    local slice = chunk_fn(x/chunk_length)
    add_cave(x, slice[1], slice[2], slice.rocks)
   end
-
-  -- The initial buffer already contains the complete start chunk. Mark it
-  -- consumed so gameplay immediately starts generating the first real biome
-  -- instead of appending a second full start chunk.
   chunk_progress = chunk_length
   chunk_p = 1
-
   cave_y1 = cave_roof_y(chunk_length)
   cave_y2 = cave_floor_y(chunk_length)
   chunk_y1 = cave_y1
-
   coins = {}
   score = 0
   score_display = 0
   new_record = false
   last_coin_y1 = nil
-
-  debug_messages = {}
-  debug_color = 8
-
   helicopter_x = 48
   helicopter_y = 32
   helicopter_vy = 2
@@ -1272,22 +1017,17 @@ function mode(m)
   helicopter_gravity = 0.1
   helicopter_min_vy = -1.5
   helicopter_max_vy = 2
-
   hitbox_x1 = helicopter_x - 4
   hitbox_y1 = helicopter_y - 4
   hitbox_x2 = hitbox_x1 + 8
   hitbox_y2 = hitbox_y1 + 6
-
   rotor_engaged = false
   previous_rotor_engaged = false
   rotor_vy = 0
   rotor_power = -0.3
-
   debris = {}
-
   rotor_collision_frame = nil
   helicopter_collision_frame = nil
-
   smoke = {}
   booms = {}
  elseif m == "dead" then
@@ -1297,17 +1037,13 @@ function mode(m)
   update_enable(update_debris)
   update_enable(update_smoke)
   update_enable(update_camera)
-
   draw_enable(draw_dead)
   draw_enable(draw_cave)
   draw_enable(draw_coins)
   draw_enable(draw_debris)
-  -- draw_enable(draw_debug)
   draw_enable(draw_smoke)
  end
 end
-
-
 function nearest(t, n)
  local v = 1
  for i = 2,#t do
@@ -1317,7 +1053,6 @@ function nearest(t, n)
  end
  return v
 end
-
 function is_space(x, y)
  local i = flr(x)
  if i > 128 or i < 1 then
@@ -1338,18 +1073,14 @@ function is_space(x, y)
  end
  return true
 end
-
 function rotor_collision()
-  dbg("rotor collision")
   if rotor_collision_frame then
    return
   end
-
   rotor_collision_frame = clock_frame
   sfx(38, 2)
   camera_shake_intensity = 6
   camera_shake_decay = 0.7
-
   for i = 1,32 do
    add(debris, {
     color = choose({0,0,0,0,0,0,0,0,0,5,6,6,7,11}),
@@ -1360,13 +1091,10 @@ function rotor_collision()
     age = 0,
    })
   end
-
   rotor_engaged = false
   previous_rotor_engaged = false
   sfx(-1, 0)
   rotor_vy = 0
-  -- Hitting the ceiling ends the boost tunnel immediately. Clear the
-  -- source timers too, otherwise the next update can restore invincibility.
   tunnel_powerup_active = false
   previous_tunnel_powerup_active = false
   previous_tunneling = false
@@ -1381,19 +1109,14 @@ function rotor_collision()
   update_disable(update_rotor)
   update_enable(update_debris)
   draw_disable(draw_rotor)
-  draw_disable(draw_hitbox)
   draw_enable(draw_debris)
 end
-
 function helicopter_collision()
- dbg("helicopter collision")
  sfx(37, 2)
  helicopter_collision_frame = clock_frame
  camera_shake_intensity = 10
  camera_shake_decay = 0.85
-
  helicopter_y = min(helicopter_y, cave_floor_y(helicopter_x) - 2)
-
  for i = 1,128 do
   add(debris, {
    color = choose({3,4,11}),
@@ -1404,23 +1127,19 @@ function helicopter_collision()
    age = 0,
   })
  end
-
  rotor_engaged = false
  previous_rotor_engaged = false
  sfx(-1, 0)
  rotor_vy = 0
  helicopter_vy = 0
  cave_vx = 0
-
  if score > high_score then
   high_score = score
   new_record = true
   dset(0, high_score)
  end
-
  mode("dead")
 end
-
 function printr(text, x, y, colors)
  for ir, col in pairs(colors) do
   local r = #colors - ir
@@ -1431,46 +1150,27 @@ function printr(text, x, y, colors)
   end
  end
 end
-
-function dbg(message)
- while #debug_messages >= 4 do
-  del(debug_messages, debug_messages[1])
- end
- debug_color += 1
- if debug_color > 15 then
-  debug_color = 8
- end
- add(debug_messages, { message, debug_color })
-end
-
 function update(flag)
  return (update_mode & flag) != 0
 end
-
 function update_enable(flag)
  update_mode |= flag
 end
-
 function update_disable(flag)
  update_mode &= ~flag
 end
-
 function draw(flag)
  return (draw_mode & flag) != 0
 end
-
 function draw_enable(flag)
  draw_mode |= flag
 end
-
 function draw_disable(flag)
  draw_mode &= ~flag
 end
-
 function loop(n, m, o)
  return flr(n % m / flr(m / o))
 end
-
 function next_incoming_coin()
  local nearest_coin = nil
  for coin in all(coins) do
@@ -1482,7 +1182,6 @@ function next_incoming_coin()
  end
  return nearest_coin
 end
-
 function fuel_when_coin_arrives(coin)
  local distance = max(0, coin.x1 - helicopter_x)
  local frames = distance / max(1, cave_vx)
@@ -1493,7 +1192,6 @@ function fuel_when_coin_arrives(coin)
  end
  return max(0, fuel - drains)
 end
-
 function avg(l)
  local t = 0
  for i in all(l) do
@@ -1501,7 +1199,6 @@ function avg(l)
  end
  return t / #l
 end
-
 function fill(n, v)
  local tbl = {}
  for i = 1,n do
@@ -1509,17 +1206,13 @@ function fill(n, v)
  end
  return tbl
 end
-
 function flrrnd(n)
  return flr(rnd(n))
 end
-
 function last(t)
  return t[#t]
 end
-
 function chunk(y1, y2, ...)
- -- each trailing argument is a {top_fn,bottom_fn} rock pair
  local c = {y1, y2}
  c.rocks = {...}
  setmetatable(c, {
@@ -1529,9 +1222,7 @@ function chunk(y1, y2, ...)
  })
  return c
 end
-
 function chunk_add(c1, c2)
- -- combining chunks preserves every rock instead of choosing only one
  local rocks = {}
  for r in all(c1.rocks) do add(rocks, r) end
  for r in all(c2.rocks) do add(rocks, r) end
@@ -1541,11 +1232,9 @@ function chunk_add(c1, c2)
   unpack(rocks)
  )
 end
-
 function chunk_and(c1, c2)
  return chunk_add(c1, c2)
 end
-
 function chunk_call(c, p)
  local v = {}
  for i = 1, 2 do
@@ -1556,9 +1245,6 @@ function chunk_call(c, p)
   end
  end
  sort(v)
-
- -- Keep one sample pair per rock even when that rock is absent at p.
- -- Stable slots let add_cave maintain separate identities for stacked rocks.
  v.rocks = {}
  for r in all(c.rocks) do
   add(v.rocks, {
@@ -1568,48 +1254,41 @@ function chunk_call(c, p)
  end
  return v
 end
-
 function terrain_add_nil(t1, t2)
  if t1 == nil then return t2 end
  if t2 == nil then return t1 end
  return t1 + t2
 end
-
 function tunnel(d, h)
  return chunk(
   static(d) + noise(1),
   static(d + h) + noise(1)
  )
 end
-
 function taper_in(from_h, to_h)
  local exp = (from_h - to_h) / 2
  local roof = first_half(static(0))
   + second_half(cosinewave(-exp/2, 0.5) + static(exp/2))
  return chunk(roof, mirror(roof, from_h))
 end
-
 function taper_out(from_h, to_h)
  local exp = (to_h - from_h) / 2
  local roof = first_half(cosinewave(exp/2, 0.5) + static(-exp/2))
   + second_half(static(-exp))
  return chunk(roof, mirror(roof, from_h))
 end
-
 function zig(y)
  return chunk(
   linear(-y) % range(0, 0.5) + linear(y) % range(0.5, 1),
   linear(-y) % range(0, 0.5) + linear(y) % range(0.5, 1)
  )
 end
-
 function zag(y)
  return chunk(
   linear(y) % range(0, 0.5) + linear(-y) % range(0.5, 1),
   linear(y) % range(0, 0.5) + linear(-y) % range(0.5, 1)
  )
 end
-
 function zigzag(y)
  return chunk(
   linear(y) % range(0, 0.25)
@@ -1622,63 +1301,54 @@ function zigzag(y)
   + linear(-y) % range(0.75, 1)
  )
 end
-
 function room(d)
  return chunk(
   static(d),
   static(d + 112)
  )
 end
-
 function corridor(d, h)
  return chunk(
   static(d),
   static(d + h)
  )
 end
-
 function resize1(y)
  return chunk(
   linear(y),
   linear(y)
  )
 end
-
 function resize(y1, y2)
  return chunk(
   linear(y1),
   linear(y2)
  )
 end
-
 function nbend(r1, r2)
  return chunk(
   nshape(r2, r1),
   nshape(r1, r2)
  )
 end
-
 function sbend(r1, r2)
  return chunk(
   sshape(r1, r2),
   sshape(r2, r1)
  )
 end
-
 function ubend(r1, r2)
  return chunk(
   ushape(r2, r1),
   ushape(r1, r2)
  )
 end
-
 function zbend(r1, r2)
  return chunk(
   zshape(r2, r1),
   zshape(r1, r2)
  )
 end
-
 function terrain(fn)
  local t = {fn}
  setmetatable(t, {
@@ -1689,7 +1359,6 @@ function terrain(fn)
  })
  return t
 end
-
 function terrain_add(t1, t2)
  return terrain(
   function(p)
@@ -1699,7 +1368,6 @@ function terrain_add(t1, t2)
   end
  )
 end
-
 function terrain_call(t, p)
  if p == nil then
   return nil
@@ -1707,7 +1375,6 @@ function terrain_call(t, p)
   return t[1](p)
  end
 end
-
 function terrain_mod(t1, t2)
  return terrain(
   function(p)
@@ -1720,7 +1387,6 @@ function terrain_mod(t1, t2)
   end
  )
 end
-
 function terrain_mul(t1, t2)
  return terrain(
   function(p)
@@ -1733,7 +1399,6 @@ function terrain_mul(t1, t2)
   end
  )
 end
-
 function invert()
  return terrain(
   function(p)
@@ -1741,7 +1406,6 @@ function invert()
   end
  )
 end
-
 function mirror(t, center)
  return terrain(function(p)
   local y = t(p)
@@ -1749,7 +1413,6 @@ function mirror(t, center)
   return center - y
  end)
 end
-
 function linear(y)
  return terrain(
   function(p)
@@ -1757,7 +1420,6 @@ function linear(y)
   end
  )
 end
-
 function noise(n)
  return terrain(
   function(p)
@@ -1769,17 +1431,13 @@ function noise(n)
   end
  )
 end
-
 function pythagoras(r)
  return terrain(
   function(p)
-   -- Keep the curve continuous. Quantizing r*p with flr() produced
-   -- visible stair-steps that became harsh at higher cave speeds.
    return r - sqrt(r^2 - (r*p)^2)
   end
  )
 end
-
 function range(from, to)
  return terrain(
   function(p)
@@ -1793,7 +1451,6 @@ function range(from, to)
   end
  )
 end
-
 function reverse()
  return terrain(
   function(p)
@@ -1801,21 +1458,18 @@ function reverse()
   end
  )
 end
-
 function first_half(t)
  return terrain(function(p)
   if p >= 0.5 then return nil end
   return t(p * 2)
  end)
 end
-
 function second_half(t)
  return terrain(function(p)
   if p < 0.5 then return nil end
   return t((p - 0.5) * 2)
  end)
 end
-
 function fragment(x, y, r, d)
  return (
   static(y)
@@ -1823,25 +1477,21 @@ function fragment(x, y, r, d)
   + (linear(r*-d) + sinewave(2, 1) + noise(1)) % range(0.5, 1)
  ) % trim() % range(x-(r*0.01), x+(r*0.01))
 end
-
 function nshape(r1, r2)
  return (
   sshape(r2, r1) % range(0, 0.5)
   + zshape(r1, r2) % range(0.5, 1)
  )
 end
-
 function sshape(r1, r2)
  return zshape(r1, r2) * static(-1)
 end
-
 function ushape(r1, r2)
  return (
   zshape(r1, r2) % range(0, 0.5)
   + sshape(r2, r1) % range(0.5, 1)
  )
 end
-
 function zshape(r1, r2)
  local p1 = r1 / (r1 + r2)
  return (
@@ -1849,32 +1499,27 @@ function zshape(r1, r2)
   + pythagoras(r2) * invert() % reverse() % range(p1, 1)
  )
 end
-
 function sinechunk(m, f)
  return chunk(
   sinewave(m,f),
   sinewave(m,f)
  )
 end
-
 function roomchunk(pinch_gap, room_width)
  local expansion = (room_width - pinch_gap) / 2
  local roof = cosinewave(expansion/2, 1) + static(-expansion/2)
  return chunk(roof, mirror(roof, pinch_gap))
 end
-
 function rock_shape_circle()
  return terrain(function(p)
   return sqrt(1 - (2*p - 1)^2)
  end)
 end
-
 function rock_shape_linear()
  return terrain(function(p)
   return p
  end)
 end
-
 function rock(p_center, width, height, offset_y, shape)
  local half_width = width / 2
  local half_height = height / 2
@@ -1882,7 +1527,6 @@ function rock(p_center, width, height, offset_y, shape)
  local p_end = p_center + half_width
  offset_y = offset_y or 0
  shape = shape or rock_shape_circle()
-
  return chunk(
   nil,
   nil,
@@ -1897,7 +1541,6 @@ function rock(p_center, width, height, offset_y, shape)
    end),
    terrain(function(p)
     if p >= p_start and p <= p_end then
-
      local rock_p = (p - p_start) / width
      local taper = shape(rock_p)
      return offset_y + half_height * taper
@@ -1907,13 +1550,10 @@ function rock(p_center, width, height, offset_y, shape)
   }
  )
 end
-
-
 function biome_start()
  biome_id = "start"
  biome_next_chunk = function()
   if biome_chunk_count == 0 then
-   -- return tunnel(0, 110)
    return chunk(
     static(0) + noise(3), --+ linear(200),
     static(0 + 96) + noise(3)--+ linear(250)
@@ -1921,7 +1561,6 @@ function biome_start()
   end
  end
 end
-
 function biome_boost()
  biome_id = "boost"
  biome_next_chunk = function()
@@ -1930,7 +1569,6 @@ function biome_boost()
   end
  end
 end
-
 function biome_rooms()
  biome_id = "rooms"
  biome_next_chunk = function()
@@ -1944,7 +1582,6 @@ function biome_rooms()
   end
  end
 end
-
 function biome_zigzag()
  biome_id = "zigzag"
  biome_next_chunk = function()
@@ -1964,7 +1601,6 @@ function biome_zigzag()
   end
  end
 end
-
 function biome_normal()
  biome_id = "normal"
  biome_next_chunk = function()
@@ -1974,27 +1610,21 @@ function biome_normal()
   end
  end
 end
-
 function step_terrain(y)
  return first_half(static(0)) + second_half(static(y))
 end
-
 function width_change(delta)
  return chunk(
   delta * static(-0.5),
   delta * static(0.5)
  )
 end
-
--- Noise that joins cleanly to adjacent chunks. Shared instances can move
--- roof and floor together; separate instances roughen each wall independently.
 function chunk_noise(n)
  return terrain(function(p)
   if p == 0 or p == 1 then return 0 end
   return flr(rnd(2^n)) - 2^n/2
  end)
 end
-
 function shared_chunk_noise(n)
  local last_p = nil
  local last_y = 0
@@ -2010,7 +1640,6 @@ function shared_chunk_noise(n)
   return last_y
  end)
 end
-
 function angular_texture(n)
  local mode = flrrnd(4)
  if mode == 0 then
@@ -2024,7 +1653,6 @@ function angular_texture(n)
   return chunk(static(0), chunk_noise(n))
  end
 end
-
 function angular_feature(height)
  local mode = flrrnd(4)
  if mode == 0 then return chunk(nil, nil) end
@@ -2033,16 +1661,12 @@ function angular_feature(height)
  end
  return rock(0.5, 0.1, 16, -12 + rnd(24))
 end
-
 function build_angular_chunk()
- -- Leave room for independent wall noise and width changes while keeping
- -- the final speed-1 corridor comfortably above the 72px invariant.
  local height = max(cave_height or 96, 112)
  local path_amount = choose({12,16,24,32})
  local path_roll = flrrnd(8)
  local path = static(0)
  local flat_step = false
-
  if path_roll == 2 or path_roll == 3 then
   path = linear(path_amount)
  elseif path_roll == 4 or path_roll == 5 then
@@ -2054,12 +1678,10 @@ function build_angular_chunk()
   path = step_terrain(-path_amount)
   flat_step = true
  end
-
  local width = static(0)
  if not flat_step then
   local width_amount = choose({4,6,8})
   local width_roll = flrrnd(5)
-  -- Bias back toward a useful passage width before applying random variation.
   if height < 80 then
    width = linear(width_amount)
   elseif height > 108 then
@@ -2076,7 +1698,6 @@ function build_angular_chunk()
      + linear(width_amount) % range(0.5,1)
   end
  end
-
  local base = corridor(0, height) + chunk(path, path) + width_change(width)
  local texture = chunk(static(0), static(0))
  local feature = chunk(nil, nil)
@@ -2084,14 +1705,8 @@ function build_angular_chunk()
   texture = angular_texture(2 + flrrnd(4))
   feature = angular_feature(height)
  end
- -- A rock straddling an instantaneous step gets displaced with the cave
- -- center on each side, turning its two halves into an impassable barrier.
- -- Keep step recipes clean and let the wall transition be the obstacle.
  return base + texture + feature
 end
-
--- Speed-1 chunks are procedural recipes rather than named layouts. Path,
--- width, texture, and features permute independently each time.
 function next_biome_angular()
  biome_chunk_count = 0
  biome_id = "angular"
@@ -2100,13 +1715,11 @@ function next_biome_angular()
   if biome_chunk_count < 1 then return generated end
  end
 end
-
 function flowy_texture(min_noise, max_noise)
  min_noise = min_noise or 2
  max_noise = max_noise or 5
  local n = min_noise + flrrnd(max_noise - min_noise + 1)
  local mode = flrrnd(5)
- -- Shared noise dominates at speed 2, keeping the passage width calm.
  if mode < 3 then
   local t = shared_chunk_noise(n)
   return chunk(t, t)
@@ -2119,10 +1732,7 @@ function flowy_texture(min_noise, max_noise)
   })
  end
 end
-
 function build_flowy_chunk()
- -- Speed 2 uses the same 72px minimum as speed 1, with extra recipe room
- -- so the safety clamp is only a fallback for unusual combinations.
  local height = max(cave_height or 104, 112)
  local motion = choose({
   resize1(0),
@@ -2136,7 +1746,6 @@ function build_flowy_chunk()
   ubend(20, 20),
   zbend(20, 20),
  })
-
  local width_amount = choose({2,4,6})
  local width_roll = flrrnd(5)
  local width = static(0)
@@ -2155,21 +1764,16 @@ function build_flowy_chunk()
   width = linear(-width_amount) % range(0,0.5)
     + linear(width_amount) % range(0.5,1)
  end
-
  local feature = chunk(nil, nil)
  if flrrnd(3) == 0 then
   feature = rock(0.35 + rnd(0.3), 0.08, 10 + rnd(8), -12 + rnd(24))
  end
-
  return corridor(0, height)
    + motion
    + width_change(width)
    + flowy_texture()
    + feature
 end
-
--- Speed 2 uses procedural recipes too, biased toward curves but retaining
--- occasional ramps and small zigs from speed 1.
 function next_biome_flowy()
  biome_chunk_count = 0
  biome_id = "flowy"
@@ -2178,9 +1782,6 @@ function next_biome_flowy()
   if biome_chunk_count < 1 then return generated end
  end
 end
-
--- Speed 3 keeps the Pythagorean character but uses shallow elevation
--- changes; at three columns/frame larger bends were often unsurvivable.
 function next_biome_very_flowy()
  biome_chunk_count = 0
  biome_id = "very flowy"
@@ -2192,8 +1793,6 @@ function next_biome_very_flowy()
     ubend(12, 12),
     zbend(12, 12),
    })
-   -- Occasionally carry the whole corridor gently uphill or downhill for
-   -- the length of the chunk, without changing its usable height.
    local drift = choose({static(0), linear(6), linear(-6)})
    return corridor(0, 64)
      + drift
@@ -2203,9 +1802,6 @@ function next_biome_very_flowy()
   end
  end
 end
-
--- Speed 4 trades roughness and sharp elevation changes for broad curves.
--- Its slightly wider corridor preserves reaction room at four columns/frame.
 function next_biome_ultra_flowy()
  biome_chunk_count = 0
  biome_id = "ultra flowy"
@@ -2217,8 +1813,6 @@ function next_biome_ultra_flowy()
     ubend(8, 8),
     zbend(8, 8),
    })
-   -- Keep the ultra-flowy mode calm, but give it occasional long climbs
-   -- and descents so it does not feel visually frozen.
    local drift = choose({static(0), linear(32), linear(-32)})
    return corridor(0, 72)
      + drift
@@ -2228,7 +1822,6 @@ function next_biome_ultra_flowy()
   end
  end
 end
-
 function set_cave_vx(v)
  if cave_vx == v then return end
  local previous_vx = cave_vx
@@ -2251,10 +1844,8 @@ function set_cave_vx(v)
   coin_cooldown_limit = coin_cooldown_slow
   fuel_drain_interval = fuel_drain_slow
  end
- -- Begin a chunk from the newly selected policy on the next cave update.
  biome_policy_dirty = true
 end
-
 function sinewave(magnitude, frequency)
  return terrain(
   function(p)
@@ -2262,7 +1853,6 @@ function sinewave(magnitude, frequency)
   end
  )
 end
-
 function cosinewave(magnitude, frequency)
  return terrain(
   function(p)
@@ -2270,7 +1860,6 @@ function cosinewave(magnitude, frequency)
   end
  )
 end
-
 function static(y)
  return terrain(
   function(p)
@@ -2278,7 +1867,6 @@ function static(y)
   end
  )
 end
-
 function trim()
  return terrain(
   function(p)
@@ -2288,7 +1876,6 @@ function trim()
   end
  )
 end
-
 function sort(a)
  for i=1,#a do
   local j = i
@@ -2298,52 +1885,37 @@ function sort(a)
   end
  end
 end
-
 function choose(table)
  return table[flrrnd(#table) + 1]
 end
-
 function draw_bar(l, p, x, y)
  line(x+1, y+1, x+14, y+1, 5)
  line(x+1, y+1, x+14*p, y+1, 7)
  rect(x, y, x+15, y+2, 1)
  print(l, x+17, y-1, 7)
 end
-
--- circular-buffer index for the span arrays
 function cave_index(i)
- -- Screen positions such as the smoothly moving helicopter can be
- -- fractional; cave storage is indexed by integer pixel columns.
  i = flr(i)
  return ((cave_head + i - 2) % chunk_length) + 1
 end
-
 function cave_roof_y(i)
  return cave_roof_arr[cave_index(i)]
 end
-
 function cave_floor_y(i)
  return cave_floor_arr[cave_index(i)]
 end
-
 function cave_set_roof(i, v)
  cave_roof_arr[cave_index(i)] = v
 end
-
 function cave_set_floor(i, v)
  cave_floor_arr[cave_index(i)] = v
 end
-
--- shared empty list so cave_spans() never allocates when a column has no rock
 empty_spans = {}
-
--- all spans in a column (walls are not stored here; only rocks carry spans)
 function cave_spans(i)
  local l = cave_spans_arr[cave_index(i)]
  if l == nil then return empty_spans end
  return l
 end
-
 function add_span(i, rock, top, bottom)
  local idx = cave_index(i)
  local list = cave_spans_arr[idx]
@@ -2352,14 +1924,12 @@ function add_span(i, rock, top, bottom)
   cave_spans_arr[idx] = list
  end
  add(list, {rock = rock, top = top, bottom = bottom})
- -- keep sorted by top
  for k = #list, 2, -1 do
   if list[k].top < list[k - 1].top then
    list[k], list[k - 1] = list[k - 1], list[k]
   end
  end
 end
-
 __gfx__
 000000000000000000000000000000000000000000000000000000000000dddddddd000000000000000000000000000000000000000000000000000000000000
 000000000500000003000000050000000000000005000000000000000ddd00000000ddd000000000000000000000000000000000000000000000000000000000
